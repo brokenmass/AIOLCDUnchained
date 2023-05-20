@@ -1,31 +1,3 @@
-# Kraken Elite LCD playground
-
-WARNING: i'm not responsible for any damege to your equipment. If anything get stuck your best option is to turn off your pc and disconnect it from power for a minute or two before restarting it.
-
-# Installation
-
-checkout the repository or download the latest code and install python dependencies
-
-```
-pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package
-```
-
-## Usage
-
-Ensure NZXT CAM is closed and start either the rotating demo:
-
-```
-python rotating.py
-```
-
-or the screencap demo:
-
-```
-python screencap.py
-```
-
-## License
-
 MIT License
 
 Copyright (c) 2023 Marco Massarotto
