@@ -12,16 +12,42 @@ pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package
 
 ## Usage
 
-Ensure NZXT CAM is closed and start either the rotating demo:
+Ensure NZXT CAM is closed and start one of the available functions:
+
+### Write GIF demo:
+
+Writes a gif (static or animated) to the device
+
+```
+python writeGif.py path/to/your/file.gif
+```
+
+### Rotating demo:
+
+Simple animation with frames generated in realtime:
 
 ```
 python rotating.py
 ```
 
-or the screencap demo:
+### Screencap demo:
+
+Captures an area of your screen and renders it in the kraken elit lcd
 
 ```
 python screencap.py
+```
+
+### Signalrgb demo:
+
+WORK IN PROGRESS
+
+You need to extract GothamBold.ttf font from the package available https://freefontsfamily.com/gotham-font-family/ into this project folder
+
+Receives a canvas section from signalRGB, adds temperature infos and display it on the device
+
+```
+python server.py
 ```
 
 ## License

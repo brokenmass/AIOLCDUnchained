@@ -3,6 +3,8 @@ import math
 from winusbcdc import WinUsbPy
 from typing import Tuple, List
 
+_VID = 0x1E71
+_PID = 0x300c
 _DEFAULT_TIMEOUT_MS = 1000
 _HID_WRITE_LENGTH = 64
 _HID_READ_LENGTH = 64
@@ -12,13 +14,13 @@ _MAX_RGBA_BUCKET_SIZE = _WIDTH * _HEIGHT * 4
 
 
 bulkDev = WinUsbPy()
-hidInfo = hid.enumerate(0x1E71, 0x300c)[0]
+hidInfo = hid.enumerate(_VID, _PID)[0]
 hidDev = hid.device()
 hidDev.open_path(hidInfo['path'])
 
 for device in bulkDev.list_usb_devices(deviceinterface=True, present=True, findparent=True):
     if (
-        device.path.find("vid_1e71&pid_300c") != -1
+        device.path.find("vid_{:x}&pid_{:x}".format(_VID, _PID)) != -1
         and device.parent
         and device.parent.find(hidInfo['serial_number']) != -1
     ):

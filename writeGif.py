@@ -1,14 +1,19 @@
 import time
 import driver
 import time
-from PIL import Image, ImageDraw, ImageSequence
+import sys
 
+
+if (len(sys.argv) < 2):
+    print("Usage: python ./writeGif.py /path/to/your/file.gif")
+    exit()
+
+file = open(sys.argv[1], "rb")
+gifData = file.read()
+file.close()
 driver.setLcdMode(0x2, 0x1)
 time.sleep(0.2)
 
-file = open("test.gif", "rb")
-gifData = file.read()
-file.close()
 
 for bucket in range(16):
     status = False
