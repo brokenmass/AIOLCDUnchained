@@ -8,51 +8,40 @@ _HID_WRITE_LENGTH = 64
 _HID_READ_LENGTH = 64
 _WIDTH = 640
 _HEIGHT = 640
-_MAX_BUCKET_SIZE = list(math.ceil(_WIDTH * _HEIGHT * 4 / 1024).to_bytes(2, "little"))
+_MAX_RGBA_BUCKET_SIZE = _WIDTH * _HEIGHT * 4
 
-print(_MAX_BUCKET_SIZE)
 
 bulkDev = WinUsbPy()
 hidInfo = hid.enumerate(0x1E71, 0x300c)[0]
 hidDev = hid.device()
 hidDev.open_path(hidInfo['path'])
 
-
 for device in bulkDev.list_usb_devices(deviceinterface=True, present=True, findparent=True):
     if (
         device.path.find("vid_1e71&pid_300c") != -1
         and device.parent
         and device.parent.find(hidInfo['serial_number']) != -1
-        ):
+    ):
         bulkDev.init_winusb_device_with_path(device.path)
 
 
-class LazyHexRepr:
-    def __init__(self, data, start=None, end=None, sep=':'):
-        self.data = data
-        self.start = start
-        self.end = end
-        self.sep = sep
-
-    def __repr__(self):
-        hexvals = map(lambda x: f'{x:02x}', self.data[self.start: self.end])
-        return self.sep.join(hexvals)
-
-def read(length = _HID_READ_LENGTH, *, timeout=_DEFAULT_TIMEOUT_MS):
+def read(length=_HID_READ_LENGTH, *, timeout=_DEFAULT_TIMEOUT_MS):
     hidDev.set_nonblocking(False)
     data = hidDev.read(max_length=length, timeout_ms=timeout)
     if timeout and not data:
         raise "timeout"
     return data
 
+
 def clear():
-  if hidDev.set_nonblocking(True) == 0:
-      timeout_ms = 0  # use hid_read; wont block because call succeeded
-  else:
-      timeout_ms = 1  # smallest timeout forwarded to hid_read_timeout
-  discarded = 0
-  while hidDev.read(max_length=64, timeout_ms=timeout_ms):
-      discarded += 1
+    if hidDev.set_nonblocking(True) == 0:
+        timeout_ms = 0  # use hid_read; wont block because call succeeded
+    else:
+        timeout_ms = 1  # smallest timeout forwarded to hid_read_timeout
+    discarded = 0
+    while hidDev.read(max_length=64, timeout_ms=timeout_ms):
+        discarded += 1
+
 
 def readUntil(parsers):
     for _ in range(200):
@@ -65,6 +54,7 @@ def readUntil(parsers):
             return
     assert False, f"missing messages (attempts={50}, missing={len(parsers)})"
 
+
 def write(data):
     hidDev.set_nonblocking(False)
     padding = [0x0] * (_HID_WRITE_LENGTH - len(data))
@@ -75,23 +65,32 @@ def write(data):
         print('wrote %d total bytes, expected %d', res, len(data + padding))
     return res
 
+
 def bulkWrite(data: bytes):
+
     bulkDev.write(0x2, data)
+
 
 def parseResult(m):
     return m[14] == 1
 
-def setLcdMode(mode: int, bucket = 0) -> bool:
-    write([0x38, 0x1, mode, bucket]);
+
+def setLcdMode(mode: int, bucket=0) -> bool:
+    write([0x38, 0x1, mode, bucket])
     return readUntil({b"\x39\x01": parseResult})
 
+
 def deleteBucket(bucket: int) -> bool:
-    write([0x32, 0x2, bucket]);
+    write([0x32, 0x2, bucket])
     return readUntil({b"\x33\x02": parseResult})
 
-def createBucket(bucket : int, address : Tuple[int, int] = [0,0], size : Tuple[int, int] = _MAX_BUCKET_SIZE):
-    write([ 0x32, 0x01, bucket, bucket + 1, address[0], address[1], size[0], size[1], 0x01])
+
+def createBucket(bucket: int, address: Tuple[int, int] = [0, 0], size: int = _MAX_RGBA_BUCKET_SIZE):
+    sizeBytes = list(math.ceil(size / 1024).to_bytes(2, "little"))
+    write([0x32, 0x01, bucket, bucket + 1, address[0],
+          address[1], sizeBytes[0], sizeBytes[1], 0x01])
     return readUntil({b"\x33\x01": parseResult})
+
 
 def writeRGBA(bucket: int, RGBAData: List[int]):
     write([0x36, 0x01, bucket])
@@ -108,9 +107,10 @@ def writeRGBA(bucket: int, RGBAData: List[int]):
     write([0x36, 0x02, bucket])
     return readUntil({b"\x37\x02": parseResult})
 
-def writeGIF(bucket: int, gifData: bytes):
-    # 4th byte set as 1 might indicate some sort of fast writing mode
-    write([0x36, 0x01, bucket, 0x1])
+
+def writeGIF(bucket: int, gifData: bytes, fast=True):
+    # 4th byte set as 1 might indicate some sort of fast writing mode (or blocking)
+    write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
     status = readUntil({b"\x37\x01": parseResult})
     if not status:
         return False
@@ -130,5 +130,3 @@ def writeGIF(bucket: int, gifData: bytes):
 #     msg = read()
 #     d.append([bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little") ])
 #     print("Bucket {:2} | start {:6} | size: {:6} ".format(bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little"), LazyHexRepr(msg)))
-
-# write full black frame
