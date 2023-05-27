@@ -27,7 +27,7 @@ for device in bulkDev.list_usb_devices(deviceinterface=True, present=True, findp
         bulkDev.init_winusb_device_with_path(device.path)
 
 
-def read(length=_HID_READ_LENGTH, *, timeout=_DEFAULT_TIMEOUT_MS):
+def read(length=_HID_READ_LENGTH, timeout=_DEFAULT_TIMEOUT_MS):
     hidDev.set_nonblocking(False)
     data = hidDev.read(max_length=length, timeout_ms=timeout)
     if timeout and not data:
@@ -37,9 +37,9 @@ def read(length=_HID_READ_LENGTH, *, timeout=_DEFAULT_TIMEOUT_MS):
 
 def clear():
     if hidDev.set_nonblocking(True) == 0:
-        timeout_ms = 0  # use hid_read; wont block because call succeeded
+        timeout_ms = 0
     else:
-        timeout_ms = 1  # smallest timeout forwarded to hid_read_timeout
+        timeout_ms = 1
     discarded = 0
     while hidDev.read(max_length=64, timeout_ms=timeout_ms):
         discarded += 1

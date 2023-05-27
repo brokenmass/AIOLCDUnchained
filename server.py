@@ -26,7 +26,7 @@ class RawProducer(Thread):
         self.rawBuffer = rawBuffer
 
     def run(self):
-        print("Server worker started")
+        print('Server worker started')
         frameCount = 0
         rawBuffer = self.rawBuffer
         lastFrame = time.time()
@@ -39,9 +39,9 @@ class RawProducer(Thread):
             def _set_response(self):
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
-                self.send_header("Connection", "keep-alive")
-                self.send_header("keep-alive", "timeout=5, max=30")
-                self.send_header("Content-Length", 0)
+                self.send_header('Connection', 'keep-alive')
+                self.send_header('keep-alive', 'timeout=5, max=30')
+                self.send_header('Content-Length', 0)
                 self.end_headers()
 
             def do_HEAD(self):
@@ -72,7 +72,7 @@ class RawProducer(Thread):
 #         self.daemon = True
 #         self.rawBuffer = rawBuffer
 #     def run(self):
-#         print("Server worker started")
+#         print('Server worker started')
 #         frameCount = 0
 #         lastFrame = time.time()
 #         buffer = bytes()
@@ -116,7 +116,7 @@ class GifProducer(Thread):
         self.paletteLock = paletteLock
 
     def run(self):
-        print("Gif converter worker started")
+        print('Gif converter worker started')
         while True:
             if self.gifBuffer.full():
                 time.sleep(0.005)
@@ -133,32 +133,35 @@ class GifProducer(Thread):
                     FONT_FILE, data['sensorFontSize'])
 
                 img = Image.open(BytesIO(raw)).resize(
-                    (driver._WIDTH, driver._HEIGHT), Image.Resampling.LANCZOS).convert("RGBA")
+                    (driver._WIDTH, driver._HEIGHT), Image.Resampling.LANCZOS).convert('RGBA')
                 overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
                 overlayCanvas = ImageDraw.Draw(overlay)
+                transparency = round(
+                    (100 - data['textTransparency']) * 255 / 100)
                 overlayCanvas.text(
                     (320, 120),
-                    text="SignalRGB",
-                    anchor="mm",
-                    align="center",
+                    text='SignalRGB',
+                    anchor='mm',
+                    align='center',
                     font=fontSmall,
-                    fill=(255, 255, 255, 200),
+                    fill=(255, 255, 255, transparency),
                     stroke_width=5,
-                    stroke_fill=(0, 0, 0, 50)
+                    stroke_fill=(0, 0, 0, round(transparency / 5))
                 )
                 overlayCanvas.text(
                     (320, 320),
-                    text="{:.1f}".format(28),
-                    anchor="mm",
-                    align="center",
+                    text='{:.0f}'.format(28),
+                    anchor='mm',
+                    align='center',
                     font=fontLarge,
-                    fill=(255, 255, 255, 200),
+                    fill=(255, 255, 255, transparency),
                     stroke_width=5,
-                    stroke_fill=(0, 0, 0, 50)
+                    stroke_fill=(0, 0, 0, round(transparency / 5))
                 )
 
                 byteio = BytesIO()
-                (Image.alpha_composite(img, overlay)
+                (Image.alpha_composite(img, overlay.rotate(data['rotation']))
+                 .convert('RGB')
                  .convert('P', palette=Image.Palette.ADAPTIVE, colors=palette)
                  .save(byteio, 'GIF', interlace=False, optimize=True))
 
@@ -176,11 +179,11 @@ for bucket in range(16):
     status = False
     while not status:
         status = driver.deleteBucket(bucket)
-        print("Bucket {} deleted: {}".format(bucket, status))
+        print('Bucket {} deleted: {}'.format(bucket, status))
 
 
 status = driver.createBucket(0)
-print("Bucket {} created: {}".format(0, status))
+print('Bucket {} created: {}'.format(0, status))
 
 # write full black RGBA
 driver.writeRGBA(0, [0x0, 0x0, 0x0, 0xff] * (driver._WIDTH * driver._HEIGHT))
@@ -206,7 +209,7 @@ while True:
         driver.writeGIF(0x0, frame)
         driver.setLcdMode(0x5, 0x0)
         writeTime = time.time() - startTime
-        print("FPS: {:.1f} - Frame {:5} (size: {:7}) - raw {:.2f}ms, gif {:.2f}ms, write {:.2f}ms  - Palette {}".format(
+        print('FPS: {:.1f} - Frame {:5} (size: {:7}) - raw {:.2f}ms, gif {:.2f}ms, write {:.2f}ms  - Palette {}'.format(
             fps(), frameCount, len(frame), rawTime * 1000, gifTime * 1000, writeTime * 1000, palette))
 
         # dynamiccaly adjust gif color precisione (and size) base on how much 'free time' we have.
