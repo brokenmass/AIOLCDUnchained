@@ -23,7 +23,6 @@ print("Bucket {} created: {}".format(0, status))
 
 # write full black RGBA
 driver.writeRGBA(0, [0x0, 0x0, 0x0, 0xff] * (driver._WIDTH * driver._HEIGHT))
-driver.write([0x36, 0x01, 0x0])
 driver.setLcdMode(0x4, 0x0)
 
 time.sleep(0.5)
