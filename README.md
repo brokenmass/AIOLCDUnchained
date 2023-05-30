@@ -7,7 +7,7 @@ WARNING: i'm not responsible for any damege to your equipment. If anything get s
 checkout the repository or download the latest code and install python dependencies
 
 ```
-pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package
+pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package psutil
 ```
 
 ## Usage
