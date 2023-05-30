@@ -178,7 +178,9 @@ class GifProducer(Thread):
 
                     if data["spinner"] == "CPU" or data["spinner"] == "PUMP":
                         bands = list(self.circleImg.split())
-                        bands[3] = bands[3].point(lambda x: round(x / 1.1))
+                        bands[3] = bands[3].point(
+                            lambda x: round(x / 1.1) if x > 10 else 0
+                        )
                         self.circleImg = Image.merge(self.circleImg.mode, bands)
                         circleCanvas = ImageDraw.Draw(self.circleImg)
 
