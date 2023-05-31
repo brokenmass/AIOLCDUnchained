@@ -35,15 +35,6 @@ controller:readonly
 discovery: readonly
 */
 const parameters = {
-  imageFormat: {
-    property: 'imageFormat',
-    group: '',
-    label: 'Format',
-    type: 'combobox',
-    values: ['PNG', 'JPEG'],
-    default: 'PNG',
-  },
-
   screenSize: {
     property: 'screenSize',
     group: '',
@@ -54,23 +45,39 @@ const parameters = {
     max: '80',
     default: '40',
   },
+  imageFormat: {
+    property: 'imageFormat',
+    group: '',
+    label: 'Format',
+    type: 'combobox',
+    values: ['PNG', 'JPEG'],
+    default: 'PNG',
+  },
+  colorPalette: {
+    property: 'colorPalette',
+    group: '',
+    label: 'Color Palette',
+    type: 'combobox',
+    values: ['WEB', 'ADAPTIVE'],
+    default: 'WEB',
+  },
   composition: {
     property: 'composition',
     group: '',
     label: 'Composition mode',
     type: 'combobox',
     values: ['OFF', 'OVERLAY', 'MIX'],
-    default: 'overlay',
+    default: 'OVERLAY',
   },
   overlayTransparency: {
     property: 'overlayTransparency',
     group: '',
     label: 'Overlay Transparency',
-    step: '1',
+    step: 1,
     type: 'number',
-    min: '0',
-    max: '100',
-    default: '20',
+    min: 0,
+    max: 100,
+    default: 0,
   },
   spinner: {
     property: 'spinner',
@@ -78,14 +85,14 @@ const parameters = {
     label: 'Spinner',
     type: 'combobox',
     values: ['OFF', 'STATIC', 'CPU', 'PUMP'],
-    default: 'OFF',
+    default: 'STATIC',
   },
   textOverlay: {
     property: 'textOverlay',
     group: '',
     label: 'Text overlay',
     type: 'boolean',
-    default: 'false',
+    default: true,
   },
   titleText: {
     property: 'titleText',
@@ -98,27 +105,28 @@ const parameters = {
     property: 'titleFontSize',
     group: '',
     label: 'titleFontSize',
-    step: '1',
+    step: 1,
     type: 'number',
-    min: '10',
-    max: '200',
-    default: '20',
+    min: 10,
+    max: 200,
+    default: 40,
   },
   sensorFontSize: {
     property: 'sensorFontSize',
     group: '',
     label: 'sensorFontSize',
-    step: '1',
+    step: 1,
     type: 'number',
-    min: '10',
-    max: '320',
-    default: '100',
+    min: 10,
+    max: 320,
+    default: 160,
   },
 };
 export function ControllableParameters() {
   return [
-    parameters.imageFormat,
     parameters.screenSize,
+    parameters.imageFormat,
+    parameters.colorPalette,
     parameters.composition,
   ];
 }
@@ -184,6 +192,7 @@ export function Render() {
     raw: XmlHttp.Bytes2Base64(RGBData),
     rotation: device.rotation,
 
+    colorPalette: device.getProperty('colorPalette').value,
     composition: device.getProperty('composition').value,
     overlayTransparency: device.getProperty('overlayTransparency')?.value ?? 0,
     spinner: device.getProperty('spinner')?.value ?? false,
@@ -258,7 +267,7 @@ export function DiscoveryService() {
       const controller = service.getController(value.address);
       if (controller) {
         controller.updateWithValue(value);
-      } else (controller === undefined) {
+      } else {
         service.addController(new LCDController(value));
       }
       this.Discovered({address: this.address});
@@ -284,7 +293,6 @@ export function DiscoveryService() {
 
       const devicelist = JSON.parse(devicelistString);
       devicelist.forEach((address) => {
-
         if (!service.getController(address)) {
           this.forceDiscover(address);
         }

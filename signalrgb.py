@@ -1,24 +1,25 @@
-import traceback
 import time
 import driver
 import time
-import math
 import socket
 from PIL import Image, ImageFont, ImageDraw
 from io import BytesIO
 from mss import mss
 import queue
 from threading import Thread
-from utils import FPS
+from utils import FPS, debug
 import json
 import psutil
+import sys
 import os
-
+from workers import FrameWriter
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import socketserver
 import base64
 
 FONT_FILE = "./fonts/Rubik-Bold.ttf"
+
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    FONT_FILE = os.path.join(sys._MEIPASS, FONT_FILE)
 
 MIN_SPEED = 2
 BASE_SPEED = 18
@@ -32,6 +33,9 @@ stats = {
 # initial palette size
 colors = MIN_COLORS * 2
 
+lcd = driver.KrakenLCD()
+lcd.setupStream()
+
 
 class RawProducer(Thread):
     def __init__(self, rawBuffer: queue.Queue):
@@ -40,7 +44,7 @@ class RawProducer(Thread):
         self.rawBuffer = rawBuffer
 
     def run(self):
-        print("Server worker started")
+        debug("Server worker started")
         frameCount = 0
         rawBuffer = self.rawBuffer
         lastFrame = time.time()
@@ -51,10 +55,7 @@ class RawProducer(Thread):
 
             def _set_response(self):
                 self.send_response(200)
-                self.send_header("Content-type", "text/html")
-                self.send_header("Connection", "keep-alive")
-                self.send_header("keep-alive", "timeout=5, max=30")
-                self.send_header("Content-Length", 0)
+                self.send_header("Content-type", "application/json")
                 self.end_headers()
 
             def do_HEAD(self):
@@ -79,54 +80,14 @@ class RawProducer(Thread):
         httpd.serve_forever()
 
 
-# UDP SERVER TEST
-# class RawProducer(Thread):
-#     def __init__(self, rawBuffer: queue.Queue):
-#         Thread.__init__(self)
-#         self.daemon = True
-#         self.rawBuffer = rawBuffer
-#     def run(self):
-#         print('Server worker started')
-#         frameCount = 0
-#         lastFrame = time.time()
-#         buffer = bytes()
-#         expectedSize = 0
-#         class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
-#             def handle(self):
-#                 nonlocal lastFrame
-#                 nonlocal buffer
-#                 nonlocal expectedSize
-#                 data: bytes = self.request[0].strip()
-#                 rawTime = time.time() - lastFrame
-#                 rawBuffer.put((base64.b64decode(data.decode('utf-8')), rawTime))
-#                 lastFrame = time.time()
-#                 # data: bytes = self.request[0].strip()
-#                 # if len(data) <= 8 and data[:4] == b'\xff\xaa\xbb\xff':
-#                 #     expectedSize = int.from_bytes(data[4:], byteorder='big')
-#                 #     buffer = bytes()
-#                 # else:
-#                 #     buffer += data
-#                 # if len(buffer) == expectedSize:
-#                 #     rawTime = time.time() - lastFrame
-#                 #     rawBuffer.put((buffer, rawTime))
-#                 #     buffer = bytes()
-#                 #     lastFrame = time.time()
-#         class ThreadedUDPServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
-#             pass
-#         server = ThreadedUDPServer(('127.0.0.1', 9999), ThreadedUDPRequestHandler)
-#         server.serve_forever()
-
-
-class GifProducer(Thread):
-    def __init__(self, rawBuffer: queue.Queue, gifBuffer: queue.Queue):
+class OverlayProducer(Thread):
+    def __init__(self, rawBuffer: queue.Queue, frameBuffer: queue.Queue):
         Thread.__init__(self)
         self.daemon = True
         self.rawBuffer = rawBuffer
-        self.gifBuffer = gifBuffer
+        self.frameBuffer = frameBuffer
         self.lastAngle = 0
-        self.circleImg = Image.new(
-            "RGBA", (driver._WIDTH, driver._HEIGHT), (0, 0, 0, 0)
-        )
+        self.circleImg = Image.new("RGBA", lcd.resolution, (0, 0, 0, 0))
         self.fonts = {
             "titleFontSize": 10,
             "sensorFontSize": 10,
@@ -151,143 +112,127 @@ class GifProducer(Thread):
             )
 
     def run(self):
-        print("Gif converter worker started")
+        debug("Overlay converter worker started")
         while True:
-            if self.gifBuffer.full():
-                time.sleep(0.005)
+            if self.frameBuffer.full():
+                time.sleep(0.001)
                 continue
 
             (post_data, rawTime) = self.rawBuffer.get()
             startTime = time.time()
-            try:
-                data = json.loads(post_data.decode("utf-8"))
-                raw = base64.b64decode(data["raw"])
 
-                img = (
-                    Image.open(BytesIO(raw))
-                    .convert("RGBA")
-                    .resize((driver._WIDTH, driver._HEIGHT), Image.Resampling.LANCZOS)
+            data = json.loads(post_data.decode("utf-8"))
+            raw = base64.b64decode(data["raw"])
+
+            img = (
+                Image.open(BytesIO(raw))
+                .convert("RGBA")
+                .resize(
+                    lcd.resolution,
+                    Image.Resampling.LANCZOS,
                 )
+            )
 
-                if data["composition"] != "OFF":
-                    alpha = 255
-                    if data["composition"] == "OVERLAY":
-                        alpha = round((100 - data["overlayTransparency"]) * 255 / 100)
-                    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-                    overlayCanvas = ImageDraw.Draw(overlay)
+            if data["composition"] != "OFF":
+                alpha = 255
+                if data["composition"] == "OVERLAY":
+                    alpha = round((100 - data["overlayTransparency"]) * 255 / 100)
+                overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                overlayCanvas = ImageDraw.Draw(overlay)
 
-                    if data["spinner"] == "CPU" or data["spinner"] == "PUMP":
-                        bands = list(self.circleImg.split())
-                        bands[3] = bands[3].point(
-                            lambda x: round(x / 1.1) if x > 10 else 0
-                        )
-                        self.circleImg = Image.merge(self.circleImg.mode, bands)
-                        circleCanvas = ImageDraw.Draw(self.circleImg)
+                if data["spinner"] == "CPU" or data["spinner"] == "PUMP":
+                    bands = list(self.circleImg.split())
+                    bands[3] = bands[3].point(lambda x: round(x / 1.1) if x > 10 else 0)
+                    self.circleImg = Image.merge(self.circleImg.mode, bands)
+                    circleCanvas = ImageDraw.Draw(self.circleImg)
 
-                        angle = (
-                            MIN_SPEED
-                            + BASE_SPEED * stats[data["spinner"].lower()] / 100
-                        )
+                    angle = (
+                        MIN_SPEED + BASE_SPEED * stats[data["spinner"].lower()] / 100
+                    )
 
-                        newAngle = self.lastAngle + angle
-                        circleCanvas.arc(
-                            [(0, 0), (driver._WIDTH, driver._HEIGHT)],
-                            fill=(255, 255, 255, round(alpha / 1.05)),
-                            width=driver._WIDTH // 20,
-                            start=self.lastAngle,
-                            end=self.lastAngle + angle / 2,
-                        )
-                        circleCanvas.arc(
-                            [(0, 0), (driver._WIDTH, driver._HEIGHT)],
-                            fill=(255, 255, 255, alpha),
-                            width=driver._WIDTH // 20,
-                            start=self.lastAngle + angle / 2,
-                            end=newAngle,
-                        )
-                        self.lastAngle = newAngle
-                        overlay.paste(self.circleImg)
+                    newAngle = self.lastAngle + angle
+                    circleCanvas.arc(
+                        [(0, 0), lcd.resolution],
+                        fill=(255, 255, 255, round(alpha / 1.05)),
+                        width=lcd.resolution.width // 20,
+                        start=self.lastAngle,
+                        end=self.lastAngle + angle / 2,
+                    )
+                    circleCanvas.arc(
+                        [(0, 0), lcd.resolution],
+                        fill=(255, 255, 255, alpha),
+                        width=lcd.resolution.width // 20,
+                        start=self.lastAngle + angle / 2,
+                        end=newAngle,
+                    )
+                    self.lastAngle = newAngle
+                    overlay.paste(self.circleImg)
 
-                    if data["spinner"] == "STATIC":
-                        overlayCanvas.ellipse(
-                            [(0, 0), (driver._WIDTH, driver._HEIGHT)],
-                            outline=(255, 255, 255, alpha),
-                            width=driver._WIDTH // 20,
-                        )
-                    if data["textOverlay"]:
-                        self.updateFonts(data)
-                        overlayCanvas.text(
-                            (driver._WIDTH // 2, driver._HEIGHT // 5),
-                            text=data["titleText"],
-                            anchor="mm",
-                            align="center",
-                            font=self.fonts["fontTitle"],
-                            fill=(255, 255, 255, alpha),
-                        )
-                        overlayCanvas.text(
-                            (driver._WIDTH // 2, driver._HEIGHT // 2),
-                            text="{:.0f}".format(stats["liquid"]),
-                            anchor="mm",
-                            align="center",
-                            font=self.fonts["fontSensor"],
-                            fill=(255, 255, 255, alpha),
-                        )
-                        textBbox = overlayCanvas.textbbox(
-                            (driver._WIDTH // 2, driver._HEIGHT // 2),
-                            text="{:.0f}".format(stats["liquid"]),
-                            anchor="mm",
-                            align="center",
-                            font=self.fonts["fontSensor"],
-                        )
-                        overlayCanvas.text(
-                            ((textBbox[2], textBbox[1])),
-                            text="°",
-                            anchor="lt",
-                            align="center",
-                            font=self.fonts["fontDegree"],
-                            fill=(255, 255, 255, alpha),
-                        )
-                        overlayCanvas.text(
-                            (driver._WIDTH // 2, 4 * driver._HEIGHT // 5),
-                            text="Liquid",
-                            anchor="mm",
-                            align="center",
-                            font=self.fonts["fontTitle"],
-                            fill=(255, 255, 255, alpha),
-                        )
+                if data["spinner"] == "STATIC":
+                    overlayCanvas.ellipse(
+                        [(0, 0), lcd.resolution],
+                        outline=(255, 255, 255, alpha),
+                        width=lcd.resolution.width // 20,
+                    )
+                if data["textOverlay"]:
+                    self.updateFonts(data)
+                    overlayCanvas.text(
+                        (lcd.resolution.width // 2, lcd.resolution.height // 5),
+                        text=data["titleText"],
+                        anchor="mm",
+                        align="center",
+                        font=self.fonts["fontTitle"],
+                        fill=(255, 255, 255, alpha),
+                    )
+                    overlayCanvas.text(
+                        (lcd.resolution.width // 2, lcd.resolution.height // 2),
+                        text="{:.0f}".format(stats["liquid"]),
+                        anchor="mm",
+                        align="center",
+                        font=self.fonts["fontSensor"],
+                        fill=(255, 255, 255, alpha),
+                    )
+                    textBbox = overlayCanvas.textbbox(
+                        (lcd.resolution.width // 2, lcd.resolution.height // 2),
+                        text="{:.0f}".format(stats["liquid"]),
+                        anchor="mm",
+                        align="center",
+                        font=self.fonts["fontSensor"],
+                    )
+                    overlayCanvas.text(
+                        ((textBbox[2], textBbox[1])),
+                        text="°",
+                        anchor="lt",
+                        align="center",
+                        font=self.fonts["fontDegree"],
+                        fill=(255, 255, 255, alpha),
+                    )
+                    overlayCanvas.text(
+                        (lcd.resolution.width // 2, 4 * lcd.resolution.height // 5),
+                        text="Liquid",
+                        anchor="mm",
+                        align="center",
+                        font=self.fonts["fontTitle"],
+                        fill=(255, 255, 255, alpha),
+                    )
 
-                    if data["composition"] == "MIX":
-                        img = Image.composite(
-                            img,
-                            Image.new("RGBA", img.size, (0, 0, 0, 0)),
-                            overlay.rotate(data["rotation"]),
-                        )
+                if data["composition"] == "MIX":
+                    img = Image.composite(
+                        img,
+                        Image.new("RGBA", img.size, (0, 0, 0, 0)),
+                        overlay.rotate(data["rotation"]),
+                    )
 
-                    if data["composition"] == "OVERLAY":
-                        img = Image.alpha_composite(
-                            img, overlay.rotate(data["rotation"])
-                        )
+                if data["composition"] == "OVERLAY":
+                    img = Image.alpha_composite(img, overlay.rotate(data["rotation"]))
 
-                byteio = BytesIO()
-                #  variable palette
-                # img.convert("RGB").convert(
-                #     "P", palette=Image.Palette.ADAPTIVE, colors=colors
-                # ).save(byteio, "GIF", interlace=False)
-
-                #  dithering
-                # img = img.convert("RGB")
-                # pal = img.quantize(colors)
-                # dither_lesscol = img.quantize(
-                #     colors, palette=pal, dither=Image.FLOYDSTEINBERG
-                # )
-                # dither_lesscol.save(byteio, "GIF", interlace=False, optimize=True)
-
-                img.convert("RGB").convert("P").save(byteio, "GIF", interlace=False)
-                self.gifBuffer.put(
-                    (byteio.getvalue(), rawTime, time.time() - startTime)
+            self.frameBuffer.put(
+                (
+                    lcd.imageToFrame(img, adaptive=data["colorPalette"] == "ADAPTIVE"),
+                    rawTime,
+                    time.time() - startTime,
                 )
-            except Exception:
-                print(traceback.format_exc())
-                pass
+            )
 
 
 class StatsProducer(Thread):
@@ -296,83 +241,61 @@ class StatsProducer(Thread):
         self.daemon = True
 
     def run(self):
+        debug("CPU stats producer started")
         while True:
             stats["cpu"] = psutil.cpu_percent(1)
 
 
-driver.setLcdMode(0x2, 0x1)
-time.sleep(0.2)
+class FrameWriterWithStats(FrameWriter):
+    def __init__(self, frameBuffer: queue.Queue, lcd: driver.KrakenLCD):
+        super().__init__(frameBuffer, lcd)
+        self.updateAIOStats()
 
-for bucket in range(16):
-    status = False
-    while not status:
-        status = driver.deleteBucket(bucket)
-        print("Bucket {} deleted: {}".format(bucket, status))
-
-
-status = driver.createBucket(0)
-print("Bucket {} created: {}".format(0, status))
-
-# write full black RGBA
-driver.writeRGBA(0, [0x0, 0x0, 0x0, 0xFF] * (driver._WIDTH * driver._HEIGHT))
-driver.setLcdMode(0x4, 0x0)
-
-time.sleep(0.2)
-
-rawBuffer = queue.Queue(maxsize=2)
-gifBuffer = queue.Queue(maxsize=2)
-rawProducer = RawProducer(rawBuffer)
-gifProducer = GifProducer(rawBuffer, gifBuffer)
-statsProducer = StatsProducer()
-statsProducer.start()
-rawProducer.start()
-gifProducer.start()
-frameCount = 0
-fps = FPS()
-lastDataTime = 0
-
-
-while True:
-    try:
-        (frame, rawTime, gifTime) = gifBuffer.get()
-        startTime = time.time()
-        driver.clear()
-        driver.writeGIF(0x0, frame)
-        driver.setLcdMode(0x5, 0x0)
-        writeTime = time.time() - startTime
-        freeTime = (rawTime - writeTime) * 1000
-
-        print(
-            "FPS: {:.1f} - Frame {:5} (size: {:7}) - raw {:.2f}ms, gif {:.2f}ms, write {:.2f}ms  - Colors {:3} {:3.2f}ms free time".format(
-                fps(),
-                frameCount,
-                len(frame),
-                rawTime * 1000,
-                gifTime * 1000,
-                writeTime * 1000,
-                colors,
-                freeTime,
-            )
-        )
-        # dynamically adjust gif color precisione (and size) base on how much 'free time' we have.
-
-        if freeTime > 5 and colors < 256:
-            colors = min(256, round(colors * 1.05))
-        if freeTime < -2 and colors > 8:
-            colors = max(MIN_COLORS, round(colors * 0.95))
-
-        frameCount = frameCount + 1
-        now = time.time()
-        if now - lastDataTime > 1:
-            lastDataTime = now
-            driver.write([0x74, 0x1])
-            packet = driver.read()
+    def updateAIOStats(self):
+        if time.time() - self.lastDataTime > 1:
+            self.lastDataTime = time.time()
+            self.lcd.write([0x74, 0x1])
+            packet = self.lcd.read()
             stats["liquid"] = packet[15] + packet[16] / 10
             stats["pump"] = packet[19]
 
-        else:
-            pass
-            # fps()
-    except Exception as e:
-        traceback.print_exc()
-        time.sleep(0.001)
+    def onFrame(self):
+        super().onFrame()
+        self.updateAIOStats()
+        # dynamically adjust gif color precisione (and size) base on how much 'free time' we have.
+
+        # if freeTime > 5 and colors < 256:
+        #     colors = min(256, round(colors * 1.05))
+        # if freeTime < -2 and colors > 8:
+        #     colors = max(MIN_COLORS, round(colors * 0.95))
+
+
+dataBuffer = queue.Queue(maxsize=2)
+frameBuffer = queue.Queue(maxsize=2)
+
+rawProducer = RawProducer(dataBuffer)
+overlayProducer = OverlayProducer(dataBuffer, frameBuffer)
+statsProducer = StatsProducer()
+frameWriterWithStats = FrameWriterWithStats(frameBuffer, lcd)
+
+statsProducer.start()
+rawProducer.start()
+overlayProducer.start()
+frameWriterWithStats.start()
+
+print("SignalRGB Kraken bridge started")
+
+try:
+    while True:
+        time.sleep(1)
+        if not (
+            statsProducer.is_alive()
+            and rawProducer.is_alive()
+            and overlayProducer.is_alive()
+            and frameWriterWithStats.is_alive()
+        ):
+            raise KeyboardInterrupt("Some thread is dead")
+except KeyboardInterrupt:
+    frameWriterWithStats.shouldStop = True
+    frameWriterWithStats.join()
+    exit()

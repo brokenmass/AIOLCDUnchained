@@ -1,134 +1,336 @@
+from io import BytesIO
+import time
 import hid
 import math
 from winusbcdc import WinUsbPy
-from typing import Tuple, List
+from typing import Tuple
+from collections import namedtuple
+from enum import Enum, IntEnum
+from PIL import Image, ImageDraw
+from utils import timing, debug
 
-_VID = 0x1E71
-_PID = 0x300c
+_NZXT_VID = 0x1E71
 _DEFAULT_TIMEOUT_MS = 1000
 _HID_WRITE_LENGTH = 64
 _HID_READ_LENGTH = 64
-_WIDTH = 640
-_HEIGHT = 640
-_MAX_RGBA_BUCKET_SIZE = _WIDTH * _HEIGHT * 4
+
+_COMMON_WRITE_HEADER = [
+    0x12,
+    0xFA,
+    0x01,
+    0xE8,
+    0xAB,
+    0xCD,
+    0xEF,
+    0x98,
+    0x76,
+    0x54,
+    0x32,
+    0x10,
+]
+
+Resolution = namedtuple("Resolution", ["width", "height"])
 
 
-bulkDev = WinUsbPy()
-hidInfo = hid.enumerate(_VID, _PID)[0]
-hidDev = hid.device()
-hidDev.open_path(hidInfo['path'])
+class RENDERING_MODE(Enum):
+    RGBA = 1
+    GIF = 2
+    FAST_GIF = 3
 
-for device in bulkDev.list_usb_devices(deviceinterface=True, present=True, findparent=True):
-    if (
-        device.path.find("vid_{:x}&pid_{:x}".format(_VID, _PID)) != -1
-        and device.parent
-        and device.parent.find(hidInfo['serial_number']) != -1
+
+class DISPLAY_MODE(IntEnum):
+    LIQUID = 2
+    BUCKET = 4
+    FAST_BUCKET = 5
+
+
+SUPPORTED_DEVICES = [
+    {
+        "pid": 0x300C,
+        "name": "Kraken Elite",
+        "resolution": Resolution(640, 640),
+        "renderingMode": RENDERING_MODE.FAST_GIF,
+    },
+    {
+        "pid": 0x3008,
+        "name": "Kraken Z3",
+        "resolution": Resolution(320, 320),
+        "renderingMode": RENDERING_MODE.RGBA,
+    },
+]
+
+
+class KrakenLCD:
+    pid: int
+    name: str
+    resolution: Resolution
+    renderingMode: RENDERING_MODE
+    streamReady = False
+    nextFrameBucket = 0
+    bucketsToUse = 2
+    black: Image.Image
+    mask: Image.Image
+
+    def __init__(self):
+        for dev in SUPPORTED_DEVICES:
+            info = hid.enumerate(_NZXT_VID, dev["pid"])
+            if len(info) > 0:
+                self.hidInfo = info[0]
+                self.name = dev["name"]
+                self.pid = dev["pid"]
+                self.resolution: Resolution = dev["resolution"]
+                self.renderingMode = dev["renderingMode"]
+                self.maxRGBABucketSize: int = (
+                    self.resolution.width * self.resolution.height * 4
+                )
+                print()
+                break
+        else:
+            raise Exception("No supported device found")
+
+        self.hidDev = hid.device()
+        self.hidDev.open_path(self.hidInfo["path"])
+        self.bulkDev = WinUsbPy()
+
+        for device in self.bulkDev.list_usb_devices(
+            deviceinterface=True, present=True, findparent=True
+        ):
+            if (
+                device.path.find("vid_{:x}&pid_{:x}".format(_NZXT_VID, self.pid)) != -1
+                and device.parent
+                and device.parent.find(self.hidInfo["serial_number"]) != -1
+            ):
+                self.bulkDev.init_winusb_device_with_path(device.path)
+        self.black = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
+        self.mask = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
+        maskCanvas = ImageDraw.Draw(self.mask)
+        maskCanvas.ellipse([(0, 0), self.resolution], fill=(255, 255, 255, 255))
+
+        self.write([0x36, 0x3])
+
+    def read(self, length=_HID_READ_LENGTH, timeout=_DEFAULT_TIMEOUT_MS):
+        self.hidDev.set_nonblocking(False)
+        data = self.hidDev.read(max_length=length, timeout_ms=timeout)
+        if timeout and not data:
+            raise "timeout"
+        return data
+
+    def clear(self):
+        if self.hidDev.set_nonblocking(True) == 0:
+            timeout_ms = 0
+        else:
+            timeout_ms = 1
+        discarded = 0
+        while self.hidDev.read(max_length=64, timeout_ms=timeout_ms):
+            discarded += 1
+
+    def readUntil(self, parsers):
+        for _ in range(200):
+            msg = self.read()
+            prefix = bytes(msg[0:2])
+            func = parsers.pop(prefix, None)
+            if func:
+                return func(msg)
+            if not parsers:
+                return
+        assert False, f"missing messages (attempts={200}, missing={len(parsers)})"
+
+    def write(self, data) -> int:
+        self.hidDev.set_nonblocking(False)
+        padding = [0x0] * (_HID_WRITE_LENGTH - len(data))
+        res = self.hidDev.write(data + padding)
+        if res < 0:
+            raise OSError("Could not write to device")
+        if res != len(data + padding):
+            debug("wrote %d total bytes, expected %d", res, len(data + padding))
+        return res
+
+    def bulkWrite(self, data: bytes) -> None:
+        self.bulkDev.write(0x2, data)
+
+    def parseResult(self, m) -> bool:
+        return m[14] == 1
+
+    @timing
+    def setLcdMode(self, mode: DISPLAY_MODE, bucket=0) -> bool:
+        self.write([0x38, 0x1, mode, bucket])
+        return self.readUntil({b"\x39\x01": self.parseResult})
+
+    def deleteBucket(self, bucket: int) -> bool:
+        self.write([0x32, 0x2, bucket])
+        return self.readUntil({b"\x33\x02": self.parseResult})
+
+    def deleteAllBuckets(self):
+        for bucket in range(16):
+            status = False
+            while not status:
+                status = self.deleteBucket(bucket)
+                debug("Bucket {:2} deleted: {}".format(bucket, status))
+
+    def createBucket(
+        self,
+        bucket: int,
+        address: Tuple[int, int] = [0, 0],
+        size: int = None,
     ):
-        bulkDev.init_winusb_device_with_path(device.path)
+        sizeBytes = list(
+            math.ceil((size or self.maxRGBABucketSize) / 1024 + 1).to_bytes(2, "little")
+        )
+        self.write(
+            [
+                0x32,
+                0x01,
+                bucket,
+                bucket + 1,
+                address[0],
+                address[1],
+                sizeBytes[0],
+                sizeBytes[1],
+                0x01,
+            ]
+        )
+        return self.readUntil({b"\x33\x01": self.parseResult})
 
+    @timing
+    def writeRGBA(self, RGBAData: bytes, bucket: int) -> bool:
+        self.write([0x36, 0x01, bucket])
+        status = self.readUntil({b"\x37\x01": self.parseResult})
+        if not status:
+            return False
 
-def read(length=_HID_READ_LENGTH, timeout=_DEFAULT_TIMEOUT_MS):
-    hidDev.set_nonblocking(False)
-    data = hidDev.read(max_length=length, timeout_ms=timeout)
-    if timeout and not data:
-        raise "timeout"
-    return data
+        header = (
+            _COMMON_WRITE_HEADER
+            + [
+                0x02,
+                0x00,
+                0x00,
+                0x00,
+            ]
+            + list(len(RGBAData).to_bytes(4, "little"))
+        )
 
+        self.bulkWrite(bytes(header))
+        self.bulkWrite(RGBAData)
 
-def clear():
-    if hidDev.set_nonblocking(True) == 0:
-        timeout_ms = 0
-    else:
-        timeout_ms = 1
-    discarded = 0
-    while hidDev.read(max_length=64, timeout_ms=timeout_ms):
-        discarded += 1
+        self.write([0x36, 0x02, bucket])
+        return self.readUntil({b"\x37\x02": self.parseResult})
 
+    @timing
+    def writeGIF(self, gifData: bytes, bucket: int, fast=True) -> bool:
+        # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
+        self.write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
+        status = self.readUntil({b"\x37\x01": self.parseResult})
+        if not status:
+            return False
 
-def readUntil(parsers):
-    for _ in range(200):
-        msg = read()
-        prefix = bytes(msg[0:2])
-        func = parsers.pop(prefix, None)
-        if func:
-            return func(msg)
-        if not parsers:
-            return
-    assert False, f"missing messages (attempts={50}, missing={len(parsers)})"
+        header = (
+            _COMMON_WRITE_HEADER
+            + [
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+            ]
+            + list(len(gifData).to_bytes(4, "little"))
+        )
 
+        self.bulkWrite(bytes(header))
 
-def write(data):
-    hidDev.set_nonblocking(False)
-    padding = [0x0] * (_HID_WRITE_LENGTH - len(data))
-    res = hidDev.write(data + padding)
-    if res < 0:
-        raise OSError('Could not write to device')
-    if res != len(data + padding):
-        print('wrote %d total bytes, expected %d', res, len(data + padding))
-    return res
+        self.bulkWrite(gifData)
 
+        self.write([0x36, 0x02, bucket])
+        return self.readUntil({b"\x37\x02": self.parseResult})
 
-def bulkWrite(data: bytes):
+    def writeFrame(self, frame: bytes):
+        if not self.streamReady:
+            return False
+        self.clear()
+        result = False
+        if self.renderingMode == RENDERING_MODE.RGBA:
+            result = self.writeRGBA(frame, self.nextFrameBucket) and self.setLcdMode(
+                DISPLAY_MODE.BUCKET, self.nextFrameBucket
+            )
+        if self.renderingMode == RENDERING_MODE.GIF:
+            startAddress = list(
+                math.ceil(
+                    self.nextFrameBucket * ((self.maxRGBABucketSize) / 1024 + 1)
+                ).to_bytes(2, "little")
+            )
+            result = (
+                self.deleteBucket(self.nextFrameBucket)
+                and self.createBucket(self.nextFrameBucket, startAddress)
+                and self.writeGIF(frame, self.nextFrameBucket, fast=False)
+                and self.setLcdMode(DISPLAY_MODE.BUCKET, self.nextFrameBucket)
+            )
+        if self.renderingMode == RENDERING_MODE.FAST_GIF:
+            result = self.writeGIF(frame, 0, fast=True) and self.setLcdMode(
+                DISPLAY_MODE.FAST_BUCKET, 0
+            )
+        self.nextFrameBucket = (self.nextFrameBucket + 1) % self.bucketsToUse
+        return result
 
-    bulkDev.write(0x2, data)
+    @timing
+    def imageToFrame(self, img: Image.Image, adaptive=False) -> bytes:
+        # cut the image to circular frame. This reduce gif size by ~20%
+        img = Image.composite(img, self.black, self.mask)
 
+        if self.renderingMode == RENDERING_MODE.RGBA:
+            raw = list(img.convert("RGB").getdata())
+            output = []
+            for i in range(img.size[0] * img.size[1]):
+                output.append(raw[i][0])
+                output.append(raw[i][1])
+                output.append(raw[i][2])
+                output.append(0)
+            return bytes(output)
+        else:
+            # Ideas for improvign perfromance, unfortunately pillow has multiple bugs
+            #  variable palette
+            # img.convert("RGB").convert(
+            #     "P", palette=Image.Palette.ADAPTIVE, colors=colors
+            # ).save(byteio, "GIF", interlace=False)
 
-def parseResult(m):
-    return m[14] == 1
+            #  dithering
+            # img = img.convert("RGB")
+            # pal = img.quantize(colors)
+            # dither_lesscol = img.quantize(
+            #     colors, palette=pal, dither=Image.FLOYDSTEINBERG
+            # )
+            # dither_lesscol.save(byteio, "GIF", interlace=False, optimize=True)
+            byteio = BytesIO()
+            if adaptive:
+                img.convert("RGB").convert(
+                    "P", palette=Image.Palette.ADAPTIVE, colors=64
+                ).save(byteio, "GIF", interlace=False, optimize=True)
+            else:
+                img.convert("RGB").convert("P").save(
+                    byteio, "GIF", interlace=False, optimize=True
+                )
+            return byteio.getvalue()
 
+    def setupStream(self):
+        self.setLcdMode(DISPLAY_MODE.LIQUID, 0x1)
+        time.sleep(0.2)
 
-def setLcdMode(mode: int, bucket=0) -> bool:
-    write([0x38, 0x1, mode, bucket])
-    return readUntil({b"\x39\x01": parseResult})
+        self.deleteAllBuckets()
+        if (
+            self.renderingMode == RENDERING_MODE.RGBA
+            or self.renderingMode == RENDERING_MODE.GIF
+        ):
+            for i in range(16):
+                startAddress = list(
+                    math.ceil(i * ((self.maxRGBABucketSize) / 1024 + 1)).to_bytes(
+                        2, "little"
+                    )
+                )
+                status = self.createBucket(i, startAddress)
+                debug("Bucket {:2} created: {}".format(i, status))
 
-
-def deleteBucket(bucket: int) -> bool:
-    write([0x32, 0x2, bucket])
-    return readUntil({b"\x33\x02": parseResult})
-
-
-def createBucket(bucket: int, address: Tuple[int, int] = [0, 0], size: int = _MAX_RGBA_BUCKET_SIZE):
-    sizeBytes = list(math.ceil(size / 1024).to_bytes(2, "little"))
-    write([0x32, 0x01, bucket, bucket + 1, address[0],
-          address[1], sizeBytes[0], sizeBytes[1], 0x01])
-    return readUntil({b"\x33\x01": parseResult})
-
-
-def writeRGBA(bucket: int, RGBAData: List[int]):
-    write([0x36, 0x01, bucket])
-    status = readUntil({b"\x37\x01": parseResult})
-    if not status:
-        return False
-
-    header = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10,
-              0x02, 0x00, 0x00, 0x00] + list(len(RGBAData).to_bytes(4, "little"))
-
-    bulkWrite(bytes(header))
-    bulkWrite(bytes(RGBAData))
-
-    write([0x36, 0x02, bucket])
-    return readUntil({b"\x37\x02": parseResult})
-
-
-def writeGIF(bucket: int, gifData: bytes, fast=True):
-    # 4th byte set as 1 might indicate some sort of fast writing mode (or blocking)
-    write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
-    status = readUntil({b"\x37\x01": parseResult})
-    if not status:
-        return False
-
-    header = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10,
-              0x01, 0x00, 0x00, 0x00] + list(len(gifData).to_bytes(4, "little"))
-
-    bulkWrite(bytes(header))
-    bulkWrite(gifData)
-
-    write([0x36, 0x02, bucket])
-    return readUntil({b"\x37\x02": parseResult})
+        self.streamReady = True
 
 
 # for bucket in range(16):
-#     driver.write([0x30, 0x04, bucket])  # query bucket
-#     msg = read()
+#     driver.self.write([0x30, 0x04, bucket])  # query bucket
+#     msg = self.read()
 #     d.append([bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little") ])
-#     print("Bucket {:2} | start {:6} | size: {:6} ".format(bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little"), LazyHexRepr(msg)))
+#     debug("Bucket {:2} | start {:6} | size: {:6} ".format(bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little"), LazyHexRepr(msg)))
