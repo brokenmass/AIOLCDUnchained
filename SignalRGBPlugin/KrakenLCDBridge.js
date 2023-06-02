@@ -227,6 +227,7 @@ export function Shutdown(suspend) {
 // -------------------------------------------<( Discovery Service )>--------------------------------------------------
 
 export function DiscoveryService() {
+  this.IconUrl = 'http://127.0.0.1:30003/images/plugin.png';
   this.Initialize = function () {
     service.log('Initializing Plugin!');
   };

@@ -74,7 +74,7 @@ Item {
               Text {
                 color: theme.primarytextcolor
                 text: device.name
-                font.pixelSize: 20
+                font.pixelSize: 32
                 font.family: "Poppins"
                 font.bold: true
               }
@@ -99,23 +99,23 @@ Item {
 
                 Text {
                   color: theme.primarytextcolor
+                  font.pixelSize: 14
                   text: "Status: " + (device.online ? 'Online' : 'Offline')
                 }
                 Text {
                   color: theme.primarytextcolor
+                  font.pixelSize: 14
                   text: "Serial: " + device.id
                 }
                 Text {
                   color: theme.primarytextcolor
+                  font.pixelSize: 14
                   text: "Resolution: " + device.resolution.width + 'x' + device.resolution.height
                 }
                 Text {
                   color: theme.primarytextcolor
+                  font.pixelSize: 14
                   text: "Rendering Mode: " + device.renderingMode
-                }
-                Text {
-                  color: theme.primarytextcolor
-                  text: "Rendering Mode: " + device.image
                 }
               }
             }

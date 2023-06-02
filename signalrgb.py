@@ -16,6 +16,8 @@ from workers import FrameWriter
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import base64
 from socketserver import ThreadingMixIn
+import shutil
+from pathlib import Path
 
 BASE_PATH = "."
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -40,6 +42,18 @@ colors = MIN_COLORS * 2
 
 lcd = driver.KrakenLCD()
 lcd.setupStream()
+
+try:
+    shutil.copytree(
+        os.path.join(BASE_PATH, "SignalRGBPlugin"),
+        os.path.join(Path.home(), "Documents/WhirlwindFX/Plugins/KrakenLCDBridge/"),
+        dirs_exist_ok=True,
+    )
+    print("Successfully installed SignalRGB plugin")
+
+except Exception:
+    print("Could not automatically install SignalRGB plugin")
+
 
 ThreadingMixIn.daemon_threads = True
 
@@ -68,8 +82,13 @@ class RawProducer(Thread):
                 self._set_headers()
 
             def do_GET(self):
-                if self.path == "/images/2023elite.png":
-                    file = open("." + self.path, "rb")
+                if (
+                    self.path == "/images/2023elite.png"
+                    or self.path == "/images/2023.png"
+                    or self.path == "/images/z3.png"
+                    or self.path == "/images/plugin.png"
+                ):
+                    file = open(BASE_PATH + self.path, "rb")
                     data = file.read()
                     file.close()
                     self._set_headers("image/png")

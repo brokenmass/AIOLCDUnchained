@@ -50,6 +50,11 @@ Receives a canvas section from signalRGB, adds temperature infos and display it 
 python server.py
 ```
 
+## Images
+
+Remote desktop icons created by fzyn - Flaticon https://www.flaticon.com/free-icons/remote-desktop"
+Kraken device images taken from NZXT website
+
 ## License
 
 MIT License
