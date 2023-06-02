@@ -1,5 +1,5 @@
 export function Name() {
-  return 'LCD';
+  return 'Kraken LCD Bridge';
 }
 export function Version() {
   return '0.0.1';
@@ -130,7 +130,7 @@ export function ControllableParameters() {
     parameters.composition,
   ];
 }
-
+const BRIDGE_ADDRESS = 'http://127.0.0.1:30003';
 const colorBlack = '#000000';
 let lastForcedUpdate = 0;
 const vLedNames = ['Device Wide'];
@@ -147,6 +147,17 @@ export function LedPositions() {
 
 export function onscreenSizeChanged() {
   device.setSize([screenSize + 1, screenSize + 1]);
+}
+
+export function onBrightnessChanged() {
+  XmlHttp.Post(
+    BRIDGE_ADDRESS + '/brightness',
+    () => {},
+    {
+      brightness: device.getBrightness(),
+    },
+    false
+  );
 }
 
 export function oncompositionChanged() {
@@ -176,11 +187,15 @@ export function ontextOverlayChanged() {
 }
 
 export function Initialize() {
-  device.setName(controller.address);
+  device.log(device.brightness);
+  device.setName(controller.name);
   onscreenSizeChanged();
   oncompositionChanged();
 }
 export function Render() {
+  if (!controller.online) {
+    return false;
+  }
   const RGBData = device.getImageBuffer(0, 0, screenSize, screenSize, {
     flipH: false,
     outputWidth: screenSize,
@@ -202,7 +217,7 @@ export function Render() {
     sensorFontSize: device.getProperty('sensorFontSize')?.value,
   };
 
-  XmlHttp.Post('http://' + controller.address, () => {}, data, false);
+  XmlHttp.Post(BRIDGE_ADDRESS + '/frame', () => {}, data, false);
 }
 
 export function Shutdown(suspend) {
@@ -212,184 +227,72 @@ export function Shutdown(suspend) {
 // -------------------------------------------<( Discovery Service )>--------------------------------------------------
 
 export function DiscoveryService() {
-  this.IconUrl =
-    'https://raw.githubusercontent.com/SRGBmods/public/main/images/wled/998_led_nodemcu.png';
-
-  this.MDns = ['_customlcd._tcp.local.'];
-
-  this.forceDiscover = function (address) {
-    if (address && this.isValidAddress(address)) {
-      this.address = address;
-      this.prepareDiscovery(false);
-    }
-  };
-
-  this.forceDelete = function (addressToRemove) {
-    const devicelistString = service.getSetting(
-      'forcedDiscovery',
-      'devicelist'
-    );
-
-    if (devicelistString?.length > 0) {
-      service.log('Force Deleting WLED device at IP: ' + addressToRemove);
-
-      const devicelist = JSON.parse(devicelistString).filter(
-        (address) => address !== addressToRemove
-      );
-
-      service.saveSetting(
-        'forcedDiscovery',
-        'devicelist',
-        JSON.stringify(devicelist)
-      );
-      this.address = addressToRemove;
-      this.prepareDiscovery(true);
-    }
-  };
-
-  this.isValidAddress = function (address) {
-    return /^((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):[0-9]+$/.test(
-      address
-    );
-  };
-
-  this.prepareDiscovery = function (deletion = false) {
-    if (deletion) {
-      for (const controller of service.controllers) {
-        if (controller.obj.address === this.address) {
-          service.removeController(controller);
-
-          return;
-        }
-      }
-    } else {
-      const value = {address: this.address};
-      const controller = service.getController(value.address);
-      if (controller) {
-        controller.updateWithValue(value);
-      } else {
-        service.addController(new LCDController(value));
-      }
-      this.Discovered({address: this.address});
-      service.log(
-        `Requesting basic Device Information for forced discovery...`
-      );
-    }
-  };
-
   this.Initialize = function () {
     service.log('Initializing Plugin!');
-    service.log('Searching for network devices...');
   };
 
-  this.loadForcedDevices = function () {
-    const devicelistString = service.getSetting(
-      'forcedDiscovery',
-      'devicelist'
-    );
-
-    if (devicelistString?.length > 0) {
-      service.log('Refreshing force discovered devices...');
-
-      const devicelist = JSON.parse(devicelistString);
-      devicelist.forEach((address) => {
-        if (!service.getController(address)) {
-          this.forceDiscover(address);
+  this.ReadInfo = function (xhr) {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200 && xhr.responseText) {
+        this.deviceInfo = JSON.parse(xhr.responseText);
+        if (!this.controller) {
+          this.controller = new LCDController(this.deviceInfo);
+          service.addController(this.controller);
         }
-      });
+        this.controller.updateStatus({online: true});
+        // this.Discovered();
+      } else if (this.controller) {
+        this.controller.updateStatus({online: false});
+      }
     }
   };
 
   this.Update = function () {
-    for (const cont of service.controllers) {
-      cont.obj.update();
-    }
     const currentTime = Date.now();
-
-    if (currentTime - lastForcedUpdate >= 60000) {
+    const self = this;
+    if (currentTime - lastForcedUpdate >= 2000) {
       lastForcedUpdate = currentTime;
-
-      // do nothing for now
+      XmlHttp.Get(
+        BRIDGE_ADDRESS,
+        function (xhr) {
+          self.ReadInfo(xhr);
+        },
+        true
+      );
     }
   };
 
-  this.Discovered = function (value) {
-    service.log('This does not have autodiscovery yet');
+  this.Discovered = function () {
+    if (!this.deviceInfo) {
+      return;
+    }
   };
 }
 
 class LCDController {
-  constructor(value) {
-    this.address = value.address;
-    this.id = value.address;
-    this.offline = false;
-    this.announcedController = false;
-
+  constructor(info) {
+    this.id = info.serial;
+    this.name = info.name;
+    this.resolution = info.resolution;
+    this.renderingMode = info.renderingMode;
+    this.image = info.image;
+    this.online = true;
     this.lastUpdate = Date.now();
-
-    this.saveForceDiscovery();
-
-    this.getDeviceInfo();
+    this.announcedController = false;
   }
 
-  updateWithValue(value) {
-    this.address = value.address;
+  updateStatus({online}) {
+    this.online = online;
 
-    this.saveForceDiscovery();
-
-    service.updateController(this);
-    this.getDeviceInfo();
+    this.update();
   }
 
   update() {
-    this.createDevice();
-  }
-
-  createDevice() {
     service.updateController(this);
     if (!this.announcedController) {
       this.announcedController = true;
       service.announceController(this);
     }
-  }
-
-  getDeviceInfo() {
-    // for the moment this doesn't realy do anything. later on should request device information (like name, resolution, etc)
-
-    service.updateController(this);
-  }
-
-  saveForceDiscovery() {
-    let devicelist = [];
-
-    try {
-      devicelist = JSON.parse(
-        service.getSetting('forcedDiscovery', 'devicelist')
-      );
-    } catch (error) {}
-
-    if (!devicelist.includes(this.address)) {
-      devicelist.push(this.address);
-    }
-
-    service.saveSetting(
-      'forcedDiscovery',
-      'devicelist',
-      JSON.stringify(devicelist)
-    );
-  }
-
-  startRemove() {
-    service.suppressController(this);
-    service.updateController(this);
-  }
-
-  startDelete() {
-    discovery.forceDelete(this.address);
-  }
-
-  startForceDiscover() {
-    discovery.forceDiscover(this.address);
   }
 }
 
@@ -431,6 +334,7 @@ class XmlHttp {
 
   static Get(url, callback, async = true) {
     const xhr = new XMLHttpRequest();
+    xhr.timeout = 1000;
     xhr.open('GET', url, async);
 
     xhr.setRequestHeader('Accept', 'application/json');
@@ -443,6 +347,7 @@ class XmlHttp {
 
   static Post(url, callback, data, async = true) {
     const xhr = new XMLHttpRequest();
+    xhr.timeout = 1000;
     xhr.open('POST', url, async);
 
     xhr.setRequestHeader('Accept', 'application/json');

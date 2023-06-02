@@ -7,7 +7,7 @@ from typing import Tuple
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image, ImageDraw
-from utils import timing, debug
+from utils import debounce, timing, debug
 
 _NZXT_VID = 0x1E71
 _DEFAULT_TIMEOUT_MS = 1000
@@ -32,10 +32,10 @@ _COMMON_WRITE_HEADER = [
 Resolution = namedtuple("Resolution", ["width", "height"])
 
 
-class RENDERING_MODE(Enum):
-    RGBA = 1
-    GIF = 2
-    FAST_GIF = 3
+class RENDERING_MODE(str, Enum):
+    RGBA = "RGBA"
+    GIF = "GIF"
+    FAST_GIF = "FAST_GIF"
 
 
 class DISPLAY_MODE(IntEnum):
@@ -50,18 +50,21 @@ SUPPORTED_DEVICES = [
         "name": "Kraken Elite",
         "resolution": Resolution(640, 640),
         "renderingMode": RENDERING_MODE.FAST_GIF,
+        "image": "http://127.0.0.1:30003/images/2023elite.png",
     },
     {
         "pid": 0x3008,
         "name": "Kraken Z3",
         "resolution": Resolution(320, 320),
         "renderingMode": RENDERING_MODE.RGBA,
+        "image": "http://127.0.0.1:30003/images/z3.png",
     },
 ]
 
 
 class KrakenLCD:
     pid: int
+    serial: str
     name: str
     resolution: Resolution
     renderingMode: RENDERING_MODE
@@ -77,9 +80,11 @@ class KrakenLCD:
             if len(info) > 0:
                 self.hidInfo = info[0]
                 self.name = dev["name"]
+
                 self.pid = dev["pid"]
                 self.resolution: Resolution = dev["resolution"]
                 self.renderingMode = dev["renderingMode"]
+                self.image = dev["image"]
                 self.maxRGBABucketSize: int = (
                     self.resolution.width * self.resolution.height * 4
                 )
@@ -88,6 +93,7 @@ class KrakenLCD:
         else:
             raise Exception("No supported device found")
 
+        self.serial = self.hidInfo["serial_number"]
         self.hidDev = hid.device()
         self.hidDev.open_path(self.hidInfo["path"])
         self.bulkDev = WinUsbPy()
@@ -106,7 +112,21 @@ class KrakenLCD:
         maskCanvas = ImageDraw.Draw(self.mask)
         maskCanvas.ellipse([(0, 0), self.resolution], fill=(255, 255, 255, 255))
 
+        # // TODO: set brightness
         self.write([0x36, 0x3])
+        self.setBrightness(100)
+
+    def getInfo(self):
+        return {
+            "serial": self.serial,
+            "name": self.name,
+            "resolution": {
+                "width": self.resolution.width,
+                "height": self.resolution.height,
+            },
+            "renderingMode": self.renderingMode,
+            "image": self.image,
+        }
 
     def read(self, length=_HID_READ_LENGTH, timeout=_DEFAULT_TIMEOUT_MS):
         self.hidDev.set_nonblocking(False)
@@ -148,17 +168,39 @@ class KrakenLCD:
     def bulkWrite(self, data: bytes) -> None:
         self.bulkDev.write(0x2, data)
 
-    def parseResult(self, m) -> bool:
-        return m[14] == 1
+    def parseSuccess(self, packet) -> bool:
+        return packet[14] == 1
+
+    def parseStats(self, packet):
+        return {"liquid": packet[15] + packet[16] / 10, "pump": packet[19]}
+
+    def getStats(self):
+        self.write([0x74, 0x1])
+        return self.readUntil({b"\x75\x01": self.parseStats})
+
+    @debounce(0.5)
+    def setBrightness(self, brightness: int) -> None:
+        self.write(
+            [
+                0x30,
+                0x02,
+                0x01,
+                max(0, min(100, brightness)),
+                0x0,
+                0x0,
+                0x1,
+                0x3,  # default orientation,
+            ]
+        )
 
     @timing
     def setLcdMode(self, mode: DISPLAY_MODE, bucket=0) -> bool:
         self.write([0x38, 0x1, mode, bucket])
-        return self.readUntil({b"\x39\x01": self.parseResult})
+        return self.readUntil({b"\x39\x01": self.parseSuccess})
 
     def deleteBucket(self, bucket: int) -> bool:
         self.write([0x32, 0x2, bucket])
-        return self.readUntil({b"\x33\x02": self.parseResult})
+        return self.readUntil({b"\x33\x02": self.parseSuccess})
 
     def deleteAllBuckets(self):
         for bucket in range(16):
@@ -189,12 +231,12 @@ class KrakenLCD:
                 0x01,
             ]
         )
-        return self.readUntil({b"\x33\x01": self.parseResult})
+        return self.readUntil({b"\x33\x01": self.parseSuccess})
 
     @timing
     def writeRGBA(self, RGBAData: bytes, bucket: int) -> bool:
         self.write([0x36, 0x01, bucket])
-        status = self.readUntil({b"\x37\x01": self.parseResult})
+        status = self.readUntil({b"\x37\x01": self.parseSuccess})
         if not status:
             return False
 
@@ -213,13 +255,13 @@ class KrakenLCD:
         self.bulkWrite(RGBAData)
 
         self.write([0x36, 0x02, bucket])
-        return self.readUntil({b"\x37\x02": self.parseResult})
+        return self.readUntil({b"\x37\x02": self.parseSuccess})
 
     @timing
     def writeGIF(self, gifData: bytes, bucket: int, fast=True) -> bool:
         # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
         self.write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
-        status = self.readUntil({b"\x37\x01": self.parseResult})
+        status = self.readUntil({b"\x37\x01": self.parseSuccess})
         if not status:
             return False
 
@@ -239,7 +281,7 @@ class KrakenLCD:
         self.bulkWrite(gifData)
 
         self.write([0x36, 0x02, bucket])
-        return self.readUntil({b"\x37\x02": self.parseResult})
+        return self.readUntil({b"\x37\x02": self.parseSuccess})
 
     def writeFrame(self, frame: bytes):
         if not self.streamReady:

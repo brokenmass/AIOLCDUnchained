@@ -15,26 +15,33 @@ import os
 from workers import FrameWriter
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import base64
+from socketserver import ThreadingMixIn
 
-FONT_FILE = "./fonts/Rubik-Bold.ttf"
-
+BASE_PATH = "."
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    FONT_FILE = os.path.join(sys._MEIPASS, FONT_FILE)
+    BASE_PATH = sys._MEIPASS
+
+FONT_FILE = os.path.join(BASE_PATH, "fonts/Rubik-Bold.ttf")
+
 
 MIN_SPEED = 2
 BASE_SPEED = 18
-MIN_COLORS = 64
+
 stats = {
     "cpu": 0,
     "pump": 0,
     "liquid": 0,
 }
 
-# initial palette size
+# dyanmicPalette test
+MIN_COLORS = 64
 colors = MIN_COLORS * 2
+
 
 lcd = driver.KrakenLCD()
 lcd.setupStream()
+
+ThreadingMixIn.daemon_threads = True
 
 
 class RawProducer(Thread):
@@ -45,39 +52,57 @@ class RawProducer(Thread):
 
     def run(self):
         debug("Server worker started")
-        frameCount = 0
         rawBuffer = self.rawBuffer
         lastFrame = time.time()
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                return
+                pass
 
-            def _set_response(self):
+            def _set_headers(self, contentType="application/json"):
                 self.send_response(200)
-                self.send_header("Content-type", "application/json")
+                self.send_header("Content-type", contentType)
                 self.end_headers()
 
             def do_HEAD(self):
                 self._set_headers()
 
             def do_GET(self):
-                self._set_response()
+                if self.path == "/images/2023elite.png":
+                    file = open("." + self.path, "rb")
+                    data = file.read()
+                    file.close()
+                    self._set_headers("image/png")
+                    self.wfile.write(data)
+                else:
+                    self._set_headers()
+                    self.wfile.write(bytes(json.dumps(lcd.getInfo()), "utf-8"))
 
             def do_POST(self):
                 nonlocal lastFrame
-                content_length = int(self.headers["Content-Length"])
-                post_data = self.rfile.read(content_length)
-                rawTime = time.time() - lastFrame
-                rawBuffer.put((post_data, rawTime))
-                lastFrame = time.time()
-                self._set_response()
+                if self.path == "/brightness":
+                    post_data = self.rfile.read(
+                        int(self.headers["Content-Length"] or "0")
+                    )
+                    data = json.loads(post_data.decode("utf-8"))
+                    lcd.setBrightness(data["brightness"])
+                if self.path == "/frame":
+                    post_data = self.rfile.read(
+                        int(self.headers["Content-Length"] or "0")
+                    )
+                    rawTime = time.time() - lastFrame
+                    rawBuffer.put((post_data, rawTime))
+                    lastFrame = time.time()
+                self._set_headers()
+
+        class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
+            pass
 
         server_address = ("", 30003)
-        httpd = HTTPServer(server_address, Handler)
-        httpd.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        server = ThreadingSimpleServer(server_address, Handler)
+        # httpd.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        httpd.serve_forever()
+        server.serve_forever()
 
 
 class OverlayProducer(Thread):
@@ -254,10 +279,7 @@ class FrameWriterWithStats(FrameWriter):
     def updateAIOStats(self):
         if time.time() - self.lastDataTime > 1:
             self.lastDataTime = time.time()
-            self.lcd.write([0x74, 0x1])
-            packet = self.lcd.read()
-            stats["liquid"] = packet[15] + packet[16] / 10
-            stats["pump"] = packet[19]
+            stats.update(self.lcd.getStats())
 
     def onFrame(self):
         super().onFrame()

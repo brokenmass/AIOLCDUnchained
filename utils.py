@@ -1,6 +1,7 @@
 import time
 import sys
 import collections
+from threading import Timer
 
 DEBUG = "--debug" in sys.argv
 DEBUG_TIMINGS = "--debug-timings" in sys.argv
@@ -20,6 +21,29 @@ def timing(func):
         return res
 
     return inner if DEBUG_TIMINGS else func
+
+
+def debounce(wait):
+    def decorator(function):
+        timer = None
+
+        def debounced(*args, **kwargs):
+            nonlocal timer
+
+            def run():
+                nonlocal timer
+                timer = None
+                return function(*args, **kwargs)
+
+            if timer is not None:
+                timer.cancel()
+
+            timer = Timer(wait, run)
+            timer.start()
+
+        return debounced
+
+    return decorator
 
 
 class LazyHexRepr:
