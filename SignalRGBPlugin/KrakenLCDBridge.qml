@@ -89,7 +89,7 @@ Item {
                   source: device.image
                   fillMode: Image.PreserveAspectFit
                   antialiasing: true
-                  mipmap:false
+                  mipmap: false
                 }
               }
 
@@ -100,22 +100,22 @@ Item {
                 Text {
                   color: theme.primarytextcolor
                   font.pixelSize: 14
-                  text: "Status: " + (device.online ? 'Online' : 'Offline')
+                  text: "<b>Status: </b>" + (device.online ? 'Online' : 'Offline')
                 }
                 Text {
                   color: theme.primarytextcolor
                   font.pixelSize: 14
-                  text: "Serial: " + device.id
+                  text: "<b>Serial: </b>" + device.id
                 }
                 Text {
                   color: theme.primarytextcolor
                   font.pixelSize: 14
-                  text: "Resolution: " + device.resolution.width + 'x' + device.resolution.height
+                  text: "<b>Resolution: </b>" + device.resolution.width + 'x' + device.resolution.height
                 }
                 Text {
                   color: theme.primarytextcolor
                   font.pixelSize: 14
-                  text: "Rendering Mode: " + device.renderingMode
+                  text: "<b>Rendering Mode: </b>" + device.renderingMode
                 }
               }
             }

@@ -191,6 +191,19 @@ export function Initialize() {
   device.setName(controller.name);
   onscreenSizeChanged();
   oncompositionChanged();
+  try {
+    const request = new XMLHttpRequest();
+    request.open('GET', controller.image, false);
+    request.responseType = 'arraybuffer';
+    request.send(null);
+
+    if (request.status === 200) {
+      const str = XmlHttp.Bytes2Base64(new Uint8Array(request.response));
+      device.setImageFromBase64(str);
+    }
+  } catch (error) {
+    device.log('Could not retrieve device image');
+  }
 }
 export function Render() {
   if (!controller.online) {
