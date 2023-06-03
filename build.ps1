@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onefile --windowed --icon "./icon.ico" --add-data "./fonts;fonts/" --add-data "./images;images/" --add-data "./SignalRGBPlugin;SignalRGBPlugin/" "./signalrgb.py"

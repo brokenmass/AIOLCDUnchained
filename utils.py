@@ -59,7 +59,7 @@ class LazyHexRepr:
 
 
 class FPS:
-    value: float
+    value: float = 0.0
 
     def __init__(self, collectionLength=50):
         self.frametimestamps = collections.deque(maxlen=collectionLength)

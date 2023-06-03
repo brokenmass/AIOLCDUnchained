@@ -7,7 +7,7 @@ WARNING: i'm not responsible for any damege to your equipment. If anything get s
 checkout the repository or download the latest code and install python dependencies
 
 ```
-pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package psutil
+pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package psutil pystray pyinstaller
 ```
 
 ## Usage
@@ -40,14 +40,10 @@ python screencap.py
 
 ### Signalrgb demo:
 
-WORK IN PROGRESS
-
-You need to extract GothamBold.ttf font from the package available https://freefontsfamily.com/gotham-font-family/ into this project folder
-
 Receives a canvas section from signalRGB, adds temperature infos and display it on the device
 
 ```
-python server.py
+python signalrgb.py
 ```
 
 ## Images

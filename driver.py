@@ -46,18 +46,25 @@ class DISPLAY_MODE(IntEnum):
 
 SUPPORTED_DEVICES = [
     {
-        "pid": 0x300C,
-        "name": "Kraken Elite",
-        "resolution": Resolution(640, 640),
-        "renderingMode": RENDERING_MODE.FAST_GIF,
-        "image": "http://127.0.0.1:30003/images/2023elite.png",
-    },
-    {
         "pid": 0x3008,
         "name": "Kraken Z3",
         "resolution": Resolution(320, 320),
         "renderingMode": RENDERING_MODE.RGBA,
         "image": "http://127.0.0.1:30003/images/z3.png",
+    },
+    {
+        "pid": 0x300E,
+        "name": "Kraken 2023",
+        "resolution": Resolution(240, 240),
+        "renderingMode": RENDERING_MODE.RGBA,
+        "image": "http://127.0.0.1:30003/images/2023.png",
+    },
+    {
+        "pid": 0x300C,
+        "name": "Kraken Elite",
+        "resolution": Resolution(640, 640),
+        "renderingMode": RENDERING_MODE.FAST_GIF,
+        "image": "http://127.0.0.1:30003/images/2023elite.png",
     },
 ]
 
@@ -92,29 +99,37 @@ class KrakenLCD:
                 break
         else:
             raise Exception("No supported device found")
+        try:
+            self.serial = self.hidInfo["serial_number"]
+            self.hidDev = hid.device()
+            self.hidDev.open_path(self.hidInfo["path"])
+            self.bulkDev = WinUsbPy()
 
-        self.serial = self.hidInfo["serial_number"]
-        self.hidDev = hid.device()
-        self.hidDev.open_path(self.hidInfo["path"])
-        self.bulkDev = WinUsbPy()
-
-        for device in self.bulkDev.list_usb_devices(
-            deviceinterface=True, present=True, findparent=True
-        ):
-            if (
-                device.path.find("vid_{:x}&pid_{:x}".format(_NZXT_VID, self.pid)) != -1
-                and device.parent
-                and device.parent.find(self.hidInfo["serial_number"]) != -1
+            for device in self.bulkDev.list_usb_devices(
+                deviceinterface=True, present=True, findparent=True
             ):
-                self.bulkDev.init_winusb_device_with_path(device.path)
+                if (
+                    device.path.find("vid_{:x}&pid_{:x}".format(_NZXT_VID, self.pid))
+                    != -1
+                    and device.parent
+                    and device.parent.find(self.hidInfo["serial_number"]) != -1
+                ):
+                    self.bulkDev.init_winusb_device_with_path(device.path)
+        except Exception:
+            raise Exception("Could not connect to kraken device. Is NZXT CAM closed ?")
+
         self.black = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
         self.mask = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
         maskCanvas = ImageDraw.Draw(self.mask)
         maskCanvas.ellipse([(0, 0), self.resolution], fill=(255, 255, 255, 255))
 
-        # // TODO: set brightness
         self.write([0x36, 0x3])
         self.setBrightness(100)
+        self.createBucket(0)
+        self.writeRGBA(
+            bytes([0, 0, 0, 255] * (self.resolution.width * self.resolution.height)), 0
+        )
+        self.setLcdMode(DISPLAY_MODE.BUCKET, 0x0)
 
     def getInfo(self):
         return {
@@ -204,10 +219,15 @@ class KrakenLCD:
 
     def deleteAllBuckets(self):
         for bucket in range(16):
-            status = False
-            while not status:
+            for i in range(10):
                 status = self.deleteBucket(bucket)
-                debug("Bucket {:2} deleted: {}".format(bucket, status))
+                debug(
+                    "Bucket {:2} deleted: {} - tentative: {}".format(bucket, status, i)
+                )
+                if status:
+                    break
+            else:
+                raise Exception("Could not delete bucket {}".format(bucket))
 
     def createBucket(
         self,
@@ -351,8 +371,8 @@ class KrakenLCD:
             return byteio.getvalue()
 
     def setupStream(self):
-        self.setLcdMode(DISPLAY_MODE.LIQUID, 0x1)
-        time.sleep(0.2)
+        self.setLcdMode(DISPLAY_MODE.LIQUID, 0x0)
+        time.sleep(0.1)
 
         self.deleteAllBuckets()
         if (

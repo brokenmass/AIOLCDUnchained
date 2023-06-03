@@ -32,7 +32,7 @@ class FrameWriter(Thread):
         startTime = time.time()
         self.lcd.writeFrame(frame)
         writeTime = time.time() - startTime
-        freeTime = (rawTime - writeTime) * 1000
+        freeTime = rawTime - writeTime
 
         debug(
             "FPS: {:.1f} - Frame {:5} (size: {:7}) - raw {:.2f}ms, gif {:.2f}ms, write {:.2f}ms, free time {:.2f}ms ".format(
@@ -42,7 +42,7 @@ class FrameWriter(Thread):
                 rawTime * 1000,
                 gifTime * 1000,
                 writeTime * 1000,
-                freeTime,
+                freeTime * 1000,
             )
         )
         self.frameCount += 1

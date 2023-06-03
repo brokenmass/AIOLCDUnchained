@@ -89,7 +89,7 @@ Item {
                   source: device.image
                   fillMode: Image.PreserveAspectFit
                   antialiasing: true
-                  mipmap: false
+                  mipmap: true
                 }
               }
 

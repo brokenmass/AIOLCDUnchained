@@ -1,13 +1,13 @@
 import time
 import driver
 import time
-import socket
+import pystray
 from PIL import Image, ImageFont, ImageDraw
 from io import BytesIO
 from mss import mss
 import queue
 from threading import Thread
-from utils import FPS, debug
+from utils import debug
 import json
 import psutil
 import sys
@@ -19,12 +19,13 @@ from socketserver import ThreadingMixIn
 import shutil
 from pathlib import Path
 
+PORT = 30003
 BASE_PATH = "."
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     BASE_PATH = sys._MEIPASS
 
 FONT_FILE = os.path.join(BASE_PATH, "fonts/Rubik-Bold.ttf")
-
+APP_ICON = os.path.join(BASE_PATH, "images/plugin.png")
 
 MIN_SPEED = 2
 BASE_SPEED = 18
@@ -43,6 +44,7 @@ colors = MIN_COLORS * 2
 lcd = driver.KrakenLCD()
 lcd.setupStream()
 
+pluginInstalled = False
 try:
     shutil.copytree(
         os.path.join(BASE_PATH, "SignalRGBPlugin"),
@@ -50,6 +52,7 @@ try:
         dirs_exist_ok=True,
     )
     print("Successfully installed SignalRGB plugin")
+    pluginInstalled = True
 
 except Exception:
     print("Could not automatically install SignalRGB plugin")
@@ -117,7 +120,7 @@ class RawProducer(Thread):
         class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
             pass
 
-        server_address = ("", 30003)
+        server_address = ("", PORT)
         server = ThreadingSimpleServer(server_address, Handler)
         # httpd.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -134,9 +137,11 @@ class OverlayProducer(Thread):
         self.circleImg = Image.new("RGBA", lcd.resolution, (0, 0, 0, 0))
         self.fonts = {
             "titleFontSize": 10,
-            "sensorFontSize": 10,
+            "sensorFontSize": 100,
+            "sensorLabelFontSize": 10,
             "fontTitle": ImageFont.truetype(FONT_FILE, 10),
-            "fontSensor": ImageFont.truetype(FONT_FILE, 10),
+            "fontSensor": ImageFont.truetype(FONT_FILE, 100),
+            "fontSensorLabel": ImageFont.truetype(FONT_FILE, 10),
             "fontDegree": ImageFont.truetype(FONT_FILE, 10 // 3),
         }
 
@@ -153,6 +158,11 @@ class OverlayProducer(Thread):
             )
             self.fonts["fontDegree"] = ImageFont.truetype(
                 FONT_FILE, data["sensorFontSize"] // 3
+            )
+        if data["sensorLabelFontSize"] != self.fonts["sensorLabelFontSize"]:
+            data["sensorLabelFontSize"] = data["sensorLabelFontSize"]
+            self.fonts["fontSensorLabel"] = ImageFont.truetype(
+                FONT_FILE, data["sensorLabelFontSize"]
             )
 
     def run(self):
@@ -256,7 +266,7 @@ class OverlayProducer(Thread):
                         text="Liquid",
                         anchor="mm",
                         align="center",
-                        font=self.fonts["fontTitle"],
+                        font=self.fonts["fontSensorLabel"],
                         fill=(255, 255, 255, alpha),
                     )
 
@@ -290,6 +300,54 @@ class StatsProducer(Thread):
             stats["cpu"] = psutil.cpu_percent(1)
 
 
+class Systray(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        # monkey patching pystray to open menu on left click
+        from pystray._util import win32
+
+        win32.WM_LBUTTONUP = 0x0205
+        win32.WM_RBUTTONUP = 0x0202
+
+        self.menu = pystray.Menu(
+            pystray.MenuItem("Device: " + lcd.name, self.noop, enabled=False),
+            pystray.MenuItem(
+                "Bridge: http://127.0.0.1:{}".format(PORT), self.noop, enabled=False
+            ),
+            pystray.MenuItem(
+                "SignalRGBPlugin: "
+                + ("installed" if pluginInstalled else "not installed"),
+                self.noop,
+                enabled=False,
+            ),
+            pystray.MenuItem(
+                self.getFPS,
+                self.noop,
+                enabled=False,
+            ),
+            pystray.MenuItem("Exit", self.stop),
+        )
+        self.icon = pystray.Icon(
+            name="KrakenLCDBridge",
+            title="KrakenLCDBridge",
+            icon=Image.open(APP_ICON).resize((64, 64)),
+            menu=self.menu,
+        )
+
+    def run(self):
+        debug("Systray icon started")
+        self.icon.run()
+
+    def getFPS(self, _):
+        return "FPS: {:.2f}".format(frameWriterWithStats.fps.value)
+
+    def noop(self):
+        pass
+
+    def stop(self):
+        self.icon.stop()
+
+
 class FrameWriterWithStats(FrameWriter):
     def __init__(self, frameBuffer: queue.Queue, lcd: driver.KrakenLCD):
         super().__init__(frameBuffer, lcd)
@@ -316,27 +374,33 @@ frameBuffer = queue.Queue(maxsize=2)
 
 rawProducer = RawProducer(dataBuffer)
 overlayProducer = OverlayProducer(dataBuffer, frameBuffer)
-statsProducer = StatsProducer()
 frameWriterWithStats = FrameWriterWithStats(frameBuffer, lcd)
+statsProducer = StatsProducer()
+systray = Systray()
 
-statsProducer.start()
+
 rawProducer.start()
 overlayProducer.start()
 frameWriterWithStats.start()
+statsProducer.start()
+systray.start()
 
 print("SignalRGB Kraken bridge started")
+
 
 try:
     while True:
         time.sleep(1)
+        systray.icon.update_menu()
         if not (
             statsProducer.is_alive()
             and rawProducer.is_alive()
             and overlayProducer.is_alive()
             and frameWriterWithStats.is_alive()
+            and systray.is_alive()
         ):
             raise KeyboardInterrupt("Some thread is dead")
 except KeyboardInterrupt:
     frameWriterWithStats.shouldStop = True
     frameWriterWithStats.join()
-    exit()
+    systray.stop()
