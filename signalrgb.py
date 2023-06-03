@@ -30,6 +30,9 @@ APP_ICON = os.path.join(BASE_PATH, "images/plugin.png")
 MIN_SPEED = 2
 BASE_SPEED = 18
 
+import ctypes.wintypes
+
+
 stats = {
     "cpu": 0,
     "pump": 0,
@@ -46,9 +49,15 @@ lcd.setupStream()
 
 pluginInstalled = False
 try:
+    CSIDL_PERSONAL = 5  # My Documents
+    SHGFP_TYPE_CURRENT = 0  # Get current, not default value
+    buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+    ctypes.windll.shell32.SHGetFolderPathW(
+        None, CSIDL_PERSONAL, None, SHGFP_TYPE_CURRENT, buf
+    )
     shutil.copytree(
         os.path.join(BASE_PATH, "SignalRGBPlugin"),
-        os.path.join(Path.home(), "Documents/WhirlwindFX/Plugins/KrakenLCDBridge/"),
+        os.path.join(buf.value, "WhirlwindFX/Plugins/KrakenLCDBridge/"),
         dirs_exist_ok=True,
     )
     print("Successfully installed SignalRGB plugin")
