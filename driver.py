@@ -346,7 +346,7 @@ class KrakenLCD:
                 output.append(0)
             return bytes(output)
         else:
-            # Ideas for improvign perfromance, unfortunately pillow has multiple bugs
+            # Ideas for improving performance, unfortunately pillow has multiple bugs
             #  variable palette
             # img.convert("RGB").convert(
             #     "P", palette=Image.Palette.ADAPTIVE, colors=colors
@@ -361,13 +361,13 @@ class KrakenLCD:
             # dither_lesscol.save(byteio, "GIF", interlace=False, optimize=True)
             byteio = BytesIO()
             if adaptive:
-                img.convert("RGB").convert(
+                img = img.convert("RGB").convert(
                     "P", palette=Image.Palette.ADAPTIVE, colors=64
-                ).save(byteio, "GIF", interlace=False, optimize=True)
-            else:
-                img.convert("RGB").convert("P").save(
-                    byteio, "GIF", interlace=False, optimize=True
                 )
+            else:
+                img = img.convert("RGB").convert("P")
+
+            img.save(byteio, "GIF", interlace=False, optimize=True)
             return byteio.getvalue()
 
     def setupStream(self):

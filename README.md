@@ -1,8 +1,46 @@
-# Kraken Elite LCD playground
+# AIO LCD Unchained
 
-WARNING: i'm not responsible for any damege to your equipment. If anything get stuck your best option is to turn off your pc and disconnect it from power for a minute or two before restarting it.
+WARNING: i'm not responsible for any damage to your equipment. If anything get stuck your best option is to turn off your pc and disconnect it from power for a minute or two before restarting it.
 
-# Installation
+## Full app roadmap
+
+- Configuration:
+  - [x] SignalRGB configuration
+  - [ ] Webinterface/Electron app for complete configuration
+- Stats sources:
+  - [x] AIO itsels
+  - [x] CPU Usage
+  - [ ] LibreHardwareMonitor
+  - [ ] AIDA ?
+- Background:
+  - [x] SignalRGB
+  - [ ] Static image
+  - [ ] Single Gif
+  - [ ] Gif/Static slideshow
+- Overlay:
+  - [x] Temperature metric
+  - [ ] Other devices temperatures / stats
+  - [x] Static circle
+  - [ ] Other static shapes / Generic PNG
+  - [x] Spinner based on metrics
+  - [x] Static text
+  - [ ] Dynamic text
+  - [ ] Clock
+  - [ ] Music ticket
+- Devices:
+  - [x] NZXT Kraken 2023 Elite
+  - [x] NZXT Kraken 2023
+  - [x] NZXT Kraken Z3
+  - [ ] Corsair Capellix
+  - Suggest a device by raising an Issue !
+
+## Status
+
+Check this youtube video to see latest status of SignalRGB integration:
+
+[![Status](http://img.youtube.com/vi/-EUDxjzwlcg/0.jpg)](http://www.youtube.com/watch?v=-EUDxjzwlcg 'Kraken Elite SignalRGB')
+
+## Installation
 
 checkout the repository or download the latest code and install python dependencies
 
@@ -12,7 +50,7 @@ pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package psutil pys
 
 ## Usage
 
-Ensure NZXT CAM is closed and start one of the available functions:
+Ensure NZXT CAM / Other proprietary software is closed and start one of the available functions:
 
 ### Write GIF demo:
 

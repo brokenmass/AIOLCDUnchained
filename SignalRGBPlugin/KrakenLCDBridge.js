@@ -222,7 +222,7 @@ export function Render() {
     raw: XmlHttp.Bytes2Base64(RGBData),
     rotation: device.rotation,
 
-    colorPalette: device.getProperty('colorPalette').value,
+    colorPalette: device.getProperty('colorPalette')?.value ?? 'WEB',
     composition: device.getProperty('composition').value,
     overlayTransparency: device.getProperty('overlayTransparency')?.value ?? 0,
     spinner: device.getProperty('spinner')?.value ?? false,
