@@ -29,7 +29,7 @@ WARNING: i'm not responsible for any damage to your equipment. If anything get s
   - [ ] Music ticket
 - Devices:
   - [x] NZXT Kraken 2023 Elite
-  - [x] NZXT Kraken 2023
+  - [ ] NZXT Kraken 2023
   - [x] NZXT Kraken Z3
   - [ ] Corsair Capellix
   - Suggest a device by raising an Issue !

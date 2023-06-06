@@ -17,7 +17,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import base64
 from socketserver import ThreadingMixIn
 import shutil
-from pathlib import Path
 
 PORT = 30003
 BASE_PATH = "."
@@ -72,7 +71,7 @@ ThreadingMixIn.daemon_threads = True
 
 class RawProducer(Thread):
     def __init__(self, rawBuffer: queue.Queue):
-        Thread.__init__(self)
+        Thread.__init__(self, name="RawProducer")
         self.daemon = True
         self.rawBuffer = rawBuffer
 
@@ -138,7 +137,7 @@ class RawProducer(Thread):
 
 class OverlayProducer(Thread):
     def __init__(self, rawBuffer: queue.Queue, frameBuffer: queue.Queue):
-        Thread.__init__(self)
+        Thread.__init__(self, name="OverlayProducer")
         self.daemon = True
         self.rawBuffer = rawBuffer
         self.frameBuffer = frameBuffer

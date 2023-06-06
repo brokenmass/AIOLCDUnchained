@@ -8,7 +8,7 @@ from utils import FPS, debug
 
 class FrameWriter(Thread):
     def __init__(self, frameBuffer: queue.Queue, lcd: driver.KrakenLCD):
-        Thread.__init__(self)
+        Thread.__init__(self, name="FrameWriter")
         self.daemon = True
         self.shouldStop = False
         self.frameBuffer = frameBuffer

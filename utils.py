@@ -1,7 +1,8 @@
+import threading
 import time
 import sys
 import collections
-from threading import Timer
+from threading import Lock, Timer
 
 DEBUG = "--debug" in sys.argv
 DEBUG_TIMINGS = "--debug-timings" in sys.argv
@@ -12,12 +13,56 @@ def debug(*args, **kwargs):
         print(*args, **kwargs)
 
 
+timingStack = {}
+lock = Lock()
+
+
+def printTiming(entry):
+    def inner(entry, connection, indent="", isLastChild=True):
+        header = "┬" if len(entry["childs"]) > 0 else "─"
+        tree = indent + connection + header + "─"
+        print(
+            "{} {} took {:.2f}ms".format(
+                tree,
+                entry["name"],
+                (entry["end"] - entry["start"]) * 1000,
+                entry["threadName"],
+            )
+        )
+        for index, child in enumerate(entry["childs"]):
+            isChildLastChild = index == (len(entry["childs"]) - 1)
+            connection = "└─" if isChildLastChild else "├─"
+            nextIndent = "  " if isLastChild else "│ "
+            inner(child, connection, indent + nextIndent, isChildLastChild)
+
+    try:
+        lock.acquire()
+        inner(entry, entry["threadName"][0] + "─")
+    finally:
+        lock.release()
+
+
 def timing(func):
     def inner(*args, **kwargs):
         start = time.time()
-        res = func(*args, **kwargs)
-        print("{} took {:.2f}ms".format(func.__name__, (time.time() - start) * 1000))
+        threadId = threading.get_ident()
+        entry = {
+            "threadName": threading.current_thread().name,
+            "name": func.__name__,
+            "childs": [],
+            "start": start,
+        }
 
+        if not threadId in timingStack:
+            timingStack[threadId] = []
+        timingStack[threadId].append(entry)
+        res = func(*args, **kwargs)
+        entry["end"] = time.time()
+        timingStack[threadId].pop()
+        if len(timingStack[threadId]) > 0:
+            timingStack[threadId][-1]["childs"].append(entry)
+        else:
+            printTiming(entry)
         return res
 
     return inner if DEBUG_TIMINGS else func

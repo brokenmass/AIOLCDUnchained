@@ -13,7 +13,7 @@ _NZXT_VID = 0x1E71
 _DEFAULT_TIMEOUT_MS = 1000
 _HID_WRITE_LENGTH = 64
 _HID_READ_LENGTH = 64
-
+_MAX_READ_UNTIL_RETRIES = 50
 _COMMON_WRITE_HEADER = [
     0x12,
     0xFA,
@@ -51,6 +51,9 @@ SUPPORTED_DEVICES = [
         "resolution": Resolution(320, 320),
         "renderingMode": RENDERING_MODE.RGBA,
         "image": "http://127.0.0.1:30003/images/z3.png",
+        "totalBuckets": 16,
+        "maxBucketSize": 20 * 1024 * 1024,  # 20MB
+        "supportsLiquidMode": True,
     },
     {
         "pid": 0x300E,
@@ -58,6 +61,9 @@ SUPPORTED_DEVICES = [
         "resolution": Resolution(240, 240),
         "renderingMode": RENDERING_MODE.RGBA,
         "image": "http://127.0.0.1:30003/images/2023.png",
+        "totalBuckets": 1,
+        "maxBucketSize": 46 * 1024,  # 46KB
+        "supportsLiquidMode": False,
     },
     {
         "pid": 0x300C,
@@ -65,6 +71,9 @@ SUPPORTED_DEVICES = [
         "resolution": Resolution(640, 640),
         "renderingMode": RENDERING_MODE.FAST_GIF,
         "image": "http://127.0.0.1:30003/images/2023elite.png",
+        "totalBuckets": 16,
+        "maxBucketSize": 20 * 1024 * 1024,  # 20MB
+        "supportsLiquidMode": True,
     },
 ]
 
@@ -74,7 +83,11 @@ class KrakenLCD:
     serial: str
     name: str
     resolution: Resolution
+    totalBuckets: int
+    maxRGBABucketSize: int
+    supportsLiquidMode: bool
     renderingMode: RENDERING_MODE
+    lastReadMessage: bytes
     streamReady = False
     nextFrameBucket = 0
     bucketsToUse = 2
@@ -92,13 +105,18 @@ class KrakenLCD:
                 self.resolution: Resolution = dev["resolution"]
                 self.renderingMode = dev["renderingMode"]
                 self.image = dev["image"]
-                self.maxRGBABucketSize: int = (
-                    self.resolution.width * self.resolution.height * 4
+                self.totalBuckets = dev["totalBuckets"]
+                self.supportsLiquidMode = dev["supportsLiquidMode"]
+                self.maxRGBABucketSize: int = min(
+                    dev["maxBucketSize"],
+                    (self.resolution.width * self.resolution.height * 4),
                 )
+                self.bucketsToUse = max(self.totalBuckets, 2)
                 print()
                 break
         else:
             raise Exception("No supported device found")
+
         try:
             self.serial = self.hidInfo["serial_number"]
             self.hidDev = hid.device()
@@ -125,11 +143,6 @@ class KrakenLCD:
 
         self.write([0x36, 0x3])
         self.setBrightness(100)
-        self.createBucket(0)
-        self.writeRGBA(
-            bytes([0, 0, 0, 255] * (self.resolution.width * self.resolution.height)), 0
-        )
-        self.setLcdMode(DISPLAY_MODE.BUCKET, 0x0)
 
     def getInfo(self):
         return {
@@ -145,11 +158,12 @@ class KrakenLCD:
 
     def read(self, length=_HID_READ_LENGTH, timeout=_DEFAULT_TIMEOUT_MS):
         self.hidDev.set_nonblocking(False)
-        data = self.hidDev.read(max_length=length, timeout_ms=timeout)
-        if timeout and not data:
-            raise "timeout"
-        return data
+        self.lastReadMessage = self.hidDev.read(max_length=length, timeout_ms=timeout)
+        if timeout and not self.lastReadMessage:
+            raise Exception("Read timeout")
+        return self.lastReadMessage
 
+    @timing
     def clear(self):
         if self.hidDev.set_nonblocking(True) == 0:
             timeout_ms = 0
@@ -159,8 +173,9 @@ class KrakenLCD:
         while self.hidDev.read(max_length=64, timeout_ms=timeout_ms):
             discarded += 1
 
+    @timing
     def readUntil(self, parsers):
-        for _ in range(200):
+        for _ in range(_MAX_READ_UNTIL_RETRIES):
             msg = self.read()
             prefix = bytes(msg[0:2])
             func = parsers.pop(prefix, None)
@@ -168,27 +183,45 @@ class KrakenLCD:
                 return func(msg)
             if not parsers:
                 return
-        assert False, f"missing messages (attempts={200}, missing={len(parsers)})"
+        assert (
+            False
+        ), f"missing messages (attempts={_MAX_READ_UNTIL_RETRIES}, missing={len(parsers)})"
 
+    @timing
     def write(self, data) -> int:
         self.hidDev.set_nonblocking(False)
         padding = [0x0] * (_HID_WRITE_LENGTH - len(data))
         res = self.hidDev.write(data + padding)
         if res < 0:
             raise OSError("Could not write to device")
-        if res != len(data + padding):
-            debug("wrote %d total bytes, expected %d", res, len(data + padding))
+        if res != _HID_WRITE_LENGTH:
+            debug("wrote %d total bytes, expected %d", res, _HID_WRITE_LENGTH)
         return res
 
+    @timing
     def bulkWrite(self, data: bytes) -> None:
         self.bulkDev.write(0x2, data)
 
-    def parseSuccess(self, packet) -> bool:
+    def parseStandardResult(self, packet) -> bool:
         return packet[14] == 1
+
+    def formatStandardResult(
+        self, op: str, bucket: int, status: bool, tentative: int = -1
+    ) -> str:
+        resultMessage = (
+            "Success" if status else "Fail[{}]".format(self.lastReadMessage[14])
+        )
+        tentativeText = "[{}]".format(tentative)
+        return "{:20} bucket {:2}: {}".format(
+            op + (tentativeText if (tentative > 0) else ""),
+            bucket,
+            resultMessage,
+        )
 
     def parseStats(self, packet):
         return {"liquid": packet[15] + packet[16] / 10, "pump": packet[19]}
 
+    @timing
     def getStats(self):
         self.write([0x74, 0x1])
         return self.readUntil({b"\x75\x01": self.parseStats})
@@ -211,24 +244,33 @@ class KrakenLCD:
     @timing
     def setLcdMode(self, mode: DISPLAY_MODE, bucket=0) -> bool:
         self.write([0x38, 0x1, mode, bucket])
-        return self.readUntil({b"\x39\x01": self.parseSuccess})
+        return self.readUntil({b"\x39\x01": self.parseStandardResult})
 
-    def deleteBucket(self, bucket: int) -> bool:
-        self.write([0x32, 0x2, bucket])
-        return self.readUntil({b"\x33\x02": self.parseSuccess})
+    @timing
+    def deleteBucket(self, bucket: int, retries=1) -> bool:
+        status = False
+        for i in range(retries):
+            self.write([0x32, 0x2, bucket])
+            status = self.readUntil({b"\x33\x02": self.parseStandardResult})
+            debug(self.formatStandardResult("Delete", bucket, status, i))
+            if status:
+                return True
+        else:
+            return False
 
+    @timing
     def deleteAllBuckets(self):
-        for bucket in range(16):
+        for bucket in range(self.totalBuckets):
             for i in range(10):
-                status = self.deleteBucket(bucket)
-                debug(
-                    "Bucket {:2} deleted: {} - tentative: {}".format(bucket, status, i)
-                )
+                status = self.deleteBucket(bucket, i)
+
                 if status:
                     break
+                time.sleep(0.1)
             else:
                 raise Exception("Could not delete bucket {}".format(bucket))
 
+    @timing
     def createBucket(
         self,
         bucket: int,
@@ -251,12 +293,15 @@ class KrakenLCD:
                 0x01,
             ]
         )
-        return self.readUntil({b"\x33\x01": self.parseSuccess})
+        status = self.readUntil({b"\x33\x01": self.parseStandardResult})
+        debug(self.formatStandardResult("Create", bucket, status))
+        return status
 
     @timing
     def writeRGBA(self, RGBAData: bytes, bucket: int) -> bool:
         self.write([0x36, 0x01, bucket])
-        status = self.readUntil({b"\x37\x01": self.parseSuccess})
+        status = self.readUntil({b"\x37\x01": self.parseStandardResult})
+        debug(self.formatStandardResult("Start writeRGBA", bucket, status))
         if not status:
             return False
 
@@ -275,13 +320,16 @@ class KrakenLCD:
         self.bulkWrite(RGBAData)
 
         self.write([0x36, 0x02, bucket])
-        return self.readUntil({b"\x37\x02": self.parseSuccess})
+        status = self.readUntil({b"\x37\x02": self.parseStandardResult})
+        debug(self.formatStandardResult("End writeRGBA", bucket, status))
+        return status
 
     @timing
     def writeGIF(self, gifData: bytes, bucket: int, fast=True) -> bool:
         # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
         self.write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
-        status = self.readUntil({b"\x37\x01": self.parseSuccess})
+        status = self.readUntil({b"\x37\x01": self.parseStandardResult})
+        debug(self.formatStandardResult("Start writeGIF", bucket, status))
         if not status:
             return False
 
@@ -301,8 +349,11 @@ class KrakenLCD:
         self.bulkWrite(gifData)
 
         self.write([0x36, 0x02, bucket])
-        return self.readUntil({b"\x37\x02": self.parseSuccess})
+        status = self.readUntil({b"\x37\x02": self.parseStandardResult})
+        debug(self.formatStandardResult("End writeGIF", bucket, status))
+        return status
 
+    @timing
     def writeFrame(self, frame: bytes):
         if not self.streamReady:
             return False
@@ -318,8 +369,12 @@ class KrakenLCD:
                     self.nextFrameBucket * ((self.maxRGBABucketSize) / 1024 + 1)
                 ).to_bytes(2, "little")
             )
+
             result = (
-                self.deleteBucket(self.nextFrameBucket)
+                (
+                    self.deleteBucket(self.nextFrameBucket)
+                    or self.deleteBucket(self.nextFrameBucket)
+                )
                 and self.createBucket(self.nextFrameBucket, startAddress)
                 and self.writeGIF(frame, self.nextFrameBucket, fast=False)
                 and self.setLcdMode(DISPLAY_MODE.BUCKET, self.nextFrameBucket)
@@ -370,24 +425,23 @@ class KrakenLCD:
             img.save(byteio, "GIF", interlace=False, optimize=True)
             return byteio.getvalue()
 
+    @timing
     def setupStream(self):
-        self.setLcdMode(DISPLAY_MODE.LIQUID, 0x0)
-        time.sleep(0.1)
+        if self.supportsLiquidMode:
+            self.setLcdMode(DISPLAY_MODE.LIQUID, 0x0)
+            time.sleep(0.1)
 
-        self.deleteAllBuckets()
-        if (
-            self.renderingMode == RENDERING_MODE.RGBA
-            or self.renderingMode == RENDERING_MODE.GIF
-        ):
-            for i in range(16):
+        if self.renderingMode == RENDERING_MODE.RGBA:
+            self.deleteAllBuckets()
+            for i in range(self.bucketsToUse):
                 startAddress = list(
                     math.ceil(i * ((self.maxRGBABucketSize) / 1024 + 1)).to_bytes(
                         2, "little"
                     )
                 )
-                status = self.createBucket(i, startAddress)
-                debug("Bucket {:2} created: {}".format(i, status))
+                self.createBucket(i, startAddress)
 
+        self.setLcdMode(DISPLAY_MODE.BUCKET, 0x0)
         self.streamReady = True
 
 
