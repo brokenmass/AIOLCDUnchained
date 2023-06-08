@@ -43,6 +43,7 @@ Check this youtube video to see latest status of SignalRGB integration:
 ## Installation
 
 Download latest executable from github releases run it and restart signalrgb.
+The app adds an icon to the systray that can be left clicked
 
 ## Development
 
