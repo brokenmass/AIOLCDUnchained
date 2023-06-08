@@ -5,11 +5,17 @@ import collections
 from threading import Lock, Timer
 
 DEBUG = "--debug" in sys.argv
+DEBUG_USB = "--debug-usb" in sys.argv
 DEBUG_TIMINGS = "--debug-timings" in sys.argv
 
 
 def debug(*args, **kwargs):
     if DEBUG:
+        print(*args, **kwargs)
+
+
+def debugUsb(*args, **kwargs):
+    if DEBUG_USB:
         print(*args, **kwargs)
 
 

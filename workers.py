@@ -35,7 +35,7 @@ class FrameWriter(Thread):
         freeTime = rawTime - writeTime
 
         debug(
-            "FPS: {:.1f} - Frame {:5} (size: {:7}) - raw {:.2f}ms, gif {:.2f}ms, write {:.2f}ms, free time {:.2f}ms ".format(
+            "FPS: {:4.1f} - Frame {:5} (size: {:7}) - raw {:6.2f}ms, gif {:6.2f}ms, write {:6.2f}ms, free time {: 7.2f}ms ".format(
                 self.fps(),
                 self.frameCount,
                 len(frame),

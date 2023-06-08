@@ -7,7 +7,7 @@ from io import BytesIO
 from mss import mss
 import queue
 from threading import Thread
-from utils import debug
+from utils import debug, timing
 import json
 import psutil
 import sys
@@ -111,17 +111,17 @@ class RawProducer(Thread):
             def do_POST(self):
                 nonlocal lastFrame
                 if self.path == "/brightness":
-                    post_data = self.rfile.read(
+                    postData = self.rfile.read(
                         int(self.headers["Content-Length"] or "0")
                     )
-                    data = json.loads(post_data.decode("utf-8"))
+                    data = json.loads(postData.decode("utf-8"))
                     lcd.setBrightness(data["brightness"])
                 if self.path == "/frame":
-                    post_data = self.rfile.read(
+                    postData = self.rfile.read(
                         int(self.headers["Content-Length"] or "0")
                     )
                     rawTime = time.time() - lastFrame
-                    rawBuffer.put((post_data, rawTime))
+                    rawBuffer.put((postData, rawTime))
                     lastFrame = time.time()
                 self._set_headers()
 
@@ -180,121 +180,136 @@ class OverlayProducer(Thread):
                 time.sleep(0.001)
                 continue
 
-            (post_data, rawTime) = self.rawBuffer.get()
-            startTime = time.time()
+            self.addOverlay(*self.rawBuffer.get())
 
-            data = json.loads(post_data.decode("utf-8"))
-            raw = base64.b64decode(data["raw"])
+    @timing
+    def parseImage(self, data):
+        raw = base64.b64decode(data["raw"])
 
-            img = (
-                Image.open(BytesIO(raw))
-                .convert("RGBA")
-                .resize(
-                    lcd.resolution,
-                    Image.Resampling.LANCZOS,
-                )
+        return (
+            Image.open(BytesIO(raw))
+            .convert("RGBA")
+            .resize(
+                lcd.resolution,
+                Image.Resampling.LANCZOS,
+            )
+        )
+
+    @timing
+    def renderOverlay(self, data):
+        alpha = 255
+        if data["composition"] == "OVERLAY":
+            alpha = round((100 - data["overlayTransparency"]) * 255 / 100)
+        overlay = Image.new("RGBA", data["size"], (0, 0, 0, 0))
+        overlayCanvas = ImageDraw.Draw(overlay)
+
+        if data["spinner"] == "CPU" or data["spinner"] == "PUMP":
+            bands = list(self.circleImg.split())
+            bands[3] = bands[3].point(lambda x: round(x / 1.1) if x > 10 else 0)
+            self.circleImg = Image.merge(self.circleImg.mode, bands)
+            circleCanvas = ImageDraw.Draw(self.circleImg)
+
+            angle = MIN_SPEED + BASE_SPEED * stats[data["spinner"].lower()] / 100
+
+            newAngle = self.lastAngle + angle
+            circleCanvas.arc(
+                [(0, 0), lcd.resolution],
+                fill=(255, 255, 255, round(alpha / 1.05)),
+                width=lcd.resolution.width // 20,
+                start=self.lastAngle,
+                end=self.lastAngle + angle / 2,
+            )
+            circleCanvas.arc(
+                [(0, 0), lcd.resolution],
+                fill=(255, 255, 255, alpha),
+                width=lcd.resolution.width // 20,
+                start=self.lastAngle + angle / 2,
+                end=newAngle,
+            )
+            self.lastAngle = newAngle
+            overlay.paste(self.circleImg)
+
+        if data["spinner"] == "STATIC":
+            overlayCanvas.ellipse(
+                [(0, 0), lcd.resolution],
+                outline=(255, 255, 255, alpha),
+                width=lcd.resolution.width // 20,
+            )
+        if data["textOverlay"]:
+            self.updateFonts(data)
+            overlayCanvas.text(
+                (lcd.resolution.width // 2, lcd.resolution.height // 5),
+                text=data["titleText"],
+                anchor="mm",
+                align="center",
+                font=self.fonts["fontTitle"],
+                fill=(255, 255, 255, alpha),
+            )
+            overlayCanvas.text(
+                (lcd.resolution.width // 2, lcd.resolution.height // 2),
+                text="{:.0f}".format(stats["liquid"]),
+                anchor="mm",
+                align="center",
+                font=self.fonts["fontSensor"],
+                fill=(255, 255, 255, alpha),
+            )
+            textBbox = overlayCanvas.textbbox(
+                (lcd.resolution.width // 2, lcd.resolution.height // 2),
+                text="{:.0f}".format(stats["liquid"]),
+                anchor="mm",
+                align="center",
+                font=self.fonts["fontSensor"],
+            )
+            overlayCanvas.text(
+                ((textBbox[2], textBbox[1])),
+                text="°",
+                anchor="lt",
+                align="center",
+                font=self.fonts["fontDegree"],
+                fill=(255, 255, 255, alpha),
+            )
+            overlayCanvas.text(
+                (lcd.resolution.width // 2, 4 * lcd.resolution.height // 5),
+                text="Liquid",
+                anchor="mm",
+                align="center",
+                font=self.fonts["fontSensorLabel"],
+                fill=(255, 255, 255, alpha),
             )
 
-            if data["composition"] != "OFF":
-                alpha = 255
-                if data["composition"] == "OVERLAY":
-                    alpha = round((100 - data["overlayTransparency"]) * 255 / 100)
-                overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-                overlayCanvas = ImageDraw.Draw(overlay)
+        return overlay.rotate(data["rotation"])
 
-                if data["spinner"] == "CPU" or data["spinner"] == "PUMP":
-                    bands = list(self.circleImg.split())
-                    bands[3] = bands[3].point(lambda x: round(x / 1.1) if x > 10 else 0)
-                    self.circleImg = Image.merge(self.circleImg.mode, bands)
-                    circleCanvas = ImageDraw.Draw(self.circleImg)
-
-                    angle = (
-                        MIN_SPEED + BASE_SPEED * stats[data["spinner"].lower()] / 100
-                    )
-
-                    newAngle = self.lastAngle + angle
-                    circleCanvas.arc(
-                        [(0, 0), lcd.resolution],
-                        fill=(255, 255, 255, round(alpha / 1.05)),
-                        width=lcd.resolution.width // 20,
-                        start=self.lastAngle,
-                        end=self.lastAngle + angle / 2,
-                    )
-                    circleCanvas.arc(
-                        [(0, 0), lcd.resolution],
-                        fill=(255, 255, 255, alpha),
-                        width=lcd.resolution.width // 20,
-                        start=self.lastAngle + angle / 2,
-                        end=newAngle,
-                    )
-                    self.lastAngle = newAngle
-                    overlay.paste(self.circleImg)
-
-                if data["spinner"] == "STATIC":
-                    overlayCanvas.ellipse(
-                        [(0, 0), lcd.resolution],
-                        outline=(255, 255, 255, alpha),
-                        width=lcd.resolution.width // 20,
-                    )
-                if data["textOverlay"]:
-                    self.updateFonts(data)
-                    overlayCanvas.text(
-                        (lcd.resolution.width // 2, lcd.resolution.height // 5),
-                        text=data["titleText"],
-                        anchor="mm",
-                        align="center",
-                        font=self.fonts["fontTitle"],
-                        fill=(255, 255, 255, alpha),
-                    )
-                    overlayCanvas.text(
-                        (lcd.resolution.width // 2, lcd.resolution.height // 2),
-                        text="{:.0f}".format(stats["liquid"]),
-                        anchor="mm",
-                        align="center",
-                        font=self.fonts["fontSensor"],
-                        fill=(255, 255, 255, alpha),
-                    )
-                    textBbox = overlayCanvas.textbbox(
-                        (lcd.resolution.width // 2, lcd.resolution.height // 2),
-                        text="{:.0f}".format(stats["liquid"]),
-                        anchor="mm",
-                        align="center",
-                        font=self.fonts["fontSensor"],
-                    )
-                    overlayCanvas.text(
-                        ((textBbox[2], textBbox[1])),
-                        text="°",
-                        anchor="lt",
-                        align="center",
-                        font=self.fonts["fontDegree"],
-                        fill=(255, 255, 255, alpha),
-                    )
-                    overlayCanvas.text(
-                        (lcd.resolution.width // 2, 4 * lcd.resolution.height // 5),
-                        text="Liquid",
-                        anchor="mm",
-                        align="center",
-                        font=self.fonts["fontSensorLabel"],
-                        fill=(255, 255, 255, alpha),
-                    )
-
-                if data["composition"] == "MIX":
-                    img = Image.composite(
-                        img,
-                        Image.new("RGBA", img.size, (0, 0, 0, 0)),
-                        overlay.rotate(data["rotation"]),
-                    )
-
-                if data["composition"] == "OVERLAY":
-                    img = Image.alpha_composite(img, overlay.rotate(data["rotation"]))
-
-            self.frameBuffer.put(
-                (
-                    lcd.imageToFrame(img, adaptive=data["colorPalette"] == "ADAPTIVE"),
-                    rawTime,
-                    time.time() - startTime,
-                )
+    @timing
+    def compose(self, data, img, overlay):
+        if data["composition"] == "MIX":
+            return Image.composite(
+                img, Image.new("RGBA", img.size, (0, 0, 0, 0)), overlay
             )
+
+        if data["composition"] == "OVERLAY":
+            return Image.alpha_composite(img, overlay)
+
+    @timing
+    def addOverlay(self, postData, rawTime):
+        startTime = time.time()
+
+        data = json.loads(postData.decode("utf-8"))
+        data["size"] = lcd.resolution
+        img = self.parseImage(data)
+
+        if data["composition"] != "OFF":
+            overlay = self.renderOverlay(data)
+            img = self.compose(data, img, overlay)
+
+        overlayTime = time.time() - startTime
+
+        self.frameBuffer.put(
+            (
+                lcd.imageToFrame(img, adaptive=data["colorPalette"] == "ADAPTIVE"),
+                rawTime,
+                overlayTime,
+            )
+        )
 
 
 class StatsProducer(Thread):

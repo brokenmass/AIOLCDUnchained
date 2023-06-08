@@ -7,7 +7,7 @@ from typing import Tuple
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image, ImageDraw
-from utils import debounce, timing, debug
+from utils import debounce, timing, debugUsb
 
 _NZXT_VID = 0x1E71
 _DEFAULT_TIMEOUT_MS = 1000
@@ -195,7 +195,7 @@ class KrakenLCD:
         if res < 0:
             raise OSError("Could not write to device")
         if res != _HID_WRITE_LENGTH:
-            debug("wrote %d total bytes, expected %d", res, _HID_WRITE_LENGTH)
+            debugUsb("wrote %d total bytes, expected %d", res, _HID_WRITE_LENGTH)
         return res
 
     @timing
@@ -252,7 +252,7 @@ class KrakenLCD:
         for i in range(retries):
             self.write([0x32, 0x2, bucket])
             status = self.readUntil({b"\x33\x02": self.parseStandardResult})
-            debug(self.formatStandardResult("Delete", bucket, status, i))
+            debugUsb(self.formatStandardResult("Delete", bucket, status, i))
             if status:
                 return True
         else:
@@ -294,14 +294,14 @@ class KrakenLCD:
             ]
         )
         status = self.readUntil({b"\x33\x01": self.parseStandardResult})
-        debug(self.formatStandardResult("Create", bucket, status))
+        debugUsb(self.formatStandardResult("Create", bucket, status))
         return status
 
     @timing
     def writeRGBA(self, RGBAData: bytes, bucket: int) -> bool:
         self.write([0x36, 0x01, bucket])
         status = self.readUntil({b"\x37\x01": self.parseStandardResult})
-        debug(self.formatStandardResult("Start writeRGBA", bucket, status))
+        debugUsb(self.formatStandardResult("Start writeRGBA", bucket, status))
         if not status:
             return False
 
@@ -321,7 +321,7 @@ class KrakenLCD:
 
         self.write([0x36, 0x02, bucket])
         status = self.readUntil({b"\x37\x02": self.parseStandardResult})
-        debug(self.formatStandardResult("End writeRGBA", bucket, status))
+        debugUsb(self.formatStandardResult("End writeRGBA", bucket, status))
         return status
 
     @timing
@@ -329,7 +329,7 @@ class KrakenLCD:
         # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
         self.write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
         status = self.readUntil({b"\x37\x01": self.parseStandardResult})
-        debug(self.formatStandardResult("Start writeGIF", bucket, status))
+        debugUsb(self.formatStandardResult("Start writeGIF", bucket, status))
         if not status:
             return False
 
@@ -350,7 +350,7 @@ class KrakenLCD:
 
         self.write([0x36, 0x02, bucket])
         status = self.readUntil({b"\x37\x02": self.parseStandardResult})
-        debug(self.formatStandardResult("End writeGIF", bucket, status))
+        debugUsb(self.formatStandardResult("End writeGIF", bucket, status))
         return status
 
     @timing
@@ -401,28 +401,38 @@ class KrakenLCD:
                 output.append(0)
             return bytes(output)
         else:
-            # Ideas for improving performance, unfortunately pillow has multiple bugs
-            #  variable palette
+            # Ideas for improving performance/quality, unfortunately pillow has multiple bugs like
+            # https://github.com/python-pillow/Pillow/issues/5836
+            #
+            # A) variable palette
             # img.convert("RGB").convert(
             #     "P", palette=Image.Palette.ADAPTIVE, colors=colors
             # ).save(byteio, "GIF", interlace=False)
 
-            #  dithering
+            # B) dithering
             # img = img.convert("RGB")
             # pal = img.quantize(colors)
-            # dither_lesscol = img.quantize(
+            # img = img.quantize(
             #     colors, palette=pal, dither=Image.FLOYDSTEINBERG
             # )
-            # dither_lesscol.save(byteio, "GIF", interlace=False, optimize=True)
             byteio = BytesIO()
-            if adaptive:
-                img = img.convert("RGB").convert(
-                    "P", palette=Image.Palette.ADAPTIVE, colors=64
-                )
-            else:
-                img = img.convert("RGB").convert("P")
 
-            img.save(byteio, "GIF", interlace=False, optimize=True)
+            @timing
+            def convert():
+                nonlocal img
+                if adaptive:
+                    img = img.convert("RGB").convert(
+                        "P", palette=Image.Palette.ADAPTIVE, colors=64
+                    )
+                else:
+                    img = img.convert("RGB").convert("P")
+
+            @timing
+            def save():
+                img.save(byteio, "GIF", interlace=False, optimize=True)
+
+            convert()
+            save()
             return byteio.getvalue()
 
     @timing
@@ -449,4 +459,4 @@ class KrakenLCD:
 #     driver.self.write([0x30, 0x04, bucket])  # query bucket
 #     msg = self.read()
 #     d.append([bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little") ])
-#     debug("Bucket {:2} | start {:6} | size: {:6} ".format(bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little"), LazyHexRepr(msg)))
+#     debugUsb("Bucket {:2} | start {:6} | size: {:6} ".format(bucket, int.from_bytes([msg[17], msg[18]], "little"), int.from_bytes([msg[19], msg[20]], "little"), LazyHexRepr(msg)))
