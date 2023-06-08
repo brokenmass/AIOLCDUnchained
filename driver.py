@@ -84,6 +84,7 @@ class KrakenLCD:
     name: str
     resolution: Resolution
     totalBuckets: int
+    maxBucketSize: int
     maxRGBABucketSize: int
     supportsLiquidMode: bool
     renderingMode: RENDERING_MODE
@@ -107,6 +108,7 @@ class KrakenLCD:
                 self.image = dev["image"]
                 self.totalBuckets = dev["totalBuckets"]
                 self.supportsLiquidMode = dev["supportsLiquidMode"]
+                self.maxBucketSize = dev["maxBucketSize"]
                 self.maxRGBABucketSize: int = min(
                     dev["maxBucketSize"],
                     (self.resolution.width * self.resolution.height * 4),

@@ -42,6 +42,10 @@ Check this youtube video to see latest status of SignalRGB integration:
 
 ## Installation
 
+Download latest executable from github releases run it and restart signalrgb.
+
+## Development
+
 checkout the repository or download the latest code and install python dependencies
 
 ```
