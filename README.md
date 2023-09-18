@@ -47,10 +47,19 @@ The app adds an icon to the systray that can be left clicked
 
 ## Development
 
+You must have python 3.11 and rust installed in your system
+
 checkout the repository or download the latest code and install python dependencies
 
 ```
-pip install --upgrade hidapi mss pillow winusbcdc>=1.5 libusb-package psutil pystray pyinstaller
+pip install -r requirements.txt --upgrade
+```
+
+build and install the q565 image compressor using rust
+
+```
+maturin build --release
+pip install ./target/wheels/q565_rust-0.1.0-cp311-none-win_amd64.whl --force-reinstall
 ```
 
 ## Usage

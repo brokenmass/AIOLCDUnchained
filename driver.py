@@ -9,6 +9,7 @@ from enum import Enum, IntEnum
 from PIL import Image, ImageDraw
 from q565 import encode_img
 from utils import debounce, timing, debugUsb
+import q565_rust
 
 _NZXT_VID = 0x1E71
 _DEFAULT_TIMEOUT_MS = 1000
@@ -435,7 +436,12 @@ class KrakenLCD:
                 output.append(0)
             return bytes(output)
         elif self.renderingMode == RENDERING_MODE.Q565:
-            return encode_img(img.convert("RGB"))
+            img = img.convert("RGB")
+            width, height = img.size
+            img_bytes = img.tobytes()
+            return q565_rust.py_encode(
+                width, height, img_bytes
+            )  # encode_img(img.convert("RGB"))
         else:
             byteio = BytesIO()
 
