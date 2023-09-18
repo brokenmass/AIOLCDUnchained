@@ -7,6 +7,7 @@ from threading import Lock, Timer
 DEBUG = "--debug" in sys.argv
 DEBUG_USB = "--debug-usb" in sys.argv
 DEBUG_TIMINGS = "--debug-timings" in sys.argv
+DEBUG_Q565 = "--debug-q565" in sys.argv
 
 
 def debug(*args, **kwargs):
@@ -16,6 +17,11 @@ def debug(*args, **kwargs):
 
 def debugUsb(*args, **kwargs):
     if DEBUG_USB:
+        print(*args, **kwargs)
+
+
+def debugQ565(*args, **kwargs):
+    if DEBUG_Q565:
         print(*args, **kwargs)
 
 

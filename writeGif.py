@@ -7,7 +7,7 @@ from PIL import Image, ImageSequence
 
 if len(sys.argv) < 3:
     print("Usage: python ./writeGif.py /path/to/your/file.gif <rotation 0|90|180|270>")
-    exit()
+    sys.exit(1)
 
 
 def sizeof_fmt(num, suffix="B"):
@@ -80,7 +80,7 @@ while not found:
             found = True
     previousRun = (colors, gifSize)
     if iteration == 20:
-        exit(1)
+        sys.exit(1)
 
 lcd.setLcdMode(driver.DISPLAY_MODE.LIQUID, 0x0)
 time.sleep(0.1)

@@ -7,6 +7,7 @@ from typing import Tuple
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image, ImageDraw
+from q565 import encode_img
 from utils import debounce, timing, debugUsb
 
 _NZXT_VID = 0x1E71
@@ -36,6 +37,7 @@ class RENDERING_MODE(str, Enum):
     RGBA = "RGBA"
     GIF = "GIF"
     FAST_GIF = "FAST_GIF"
+    Q565 = "Q565"
 
 
 class DISPLAY_MODE(IntEnum):
@@ -70,7 +72,7 @@ SUPPORTED_DEVICES = [
         "pid": 0x300C,
         "name": "Kraken Elite",
         "resolution": Resolution(640, 640),
-        "renderingMode": RENDERING_MODE.FAST_GIF,
+        "renderingMode": RENDERING_MODE.Q565,
         "image": "http://127.0.0.1:30003/images/2023elite.png",
         "totalBuckets": 16,
         "maxBucketSize": 20 * 1024 * 1024,  # 20MB
@@ -95,6 +97,8 @@ class KrakenLCD:
     bucketsToUse = 2
     black: Image.Image
     mask: Image.Image
+
+    cache = None
 
     def __init__(self):
         for dev in SUPPORTED_DEVICES:
@@ -138,6 +142,7 @@ class KrakenLCD:
                     self.bulkDev.init_winusb_device_with_path(device.path)
         except Exception:
             raise Exception("Could not connect to kraken device. Is NZXT CAM closed ?")
+        debugUsb("found")
 
         self.black = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
         self.mask = Image.new("RGBA", self.resolution, (0, 0, 0, 0))
@@ -328,9 +333,8 @@ class KrakenLCD:
         return status
 
     @timing
-    def writeGIF(self, gifData: bytes, bucket: int, fast=True) -> bool:
-        # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
-        self.write([0x36, 0x01, bucket, 0x1 if fast else 0x0])
+    def writeGIF(self, gifData: bytes, bucket: int) -> bool:
+        self.write([0x36, 0x01, 0x0, 0x0])
         status = self.readUntil({b"\x37\x01": self.parseStandardResult})
         debugUsb(self.formatStandardResult("Start writeGIF", bucket, status))
         if not status:
@@ -357,6 +361,35 @@ class KrakenLCD:
         return status
 
     @timing
+    def writeQ565(self, gifData: bytes) -> bool:
+        # 4th byte set as 1 writes to some sort of fast memory in kraken elite (bucket number is not relevant)
+        self.write([0x36, 0x01, 0x0, 0x1, 0x8])
+        status = self.readUntil({b"\x37\x01": self.parseStandardResult})
+        debugUsb(self.formatStandardResult("Start writeQ565", 0, status))
+        if not status:
+            return False
+
+        header = (
+            _COMMON_WRITE_HEADER
+            + [
+                0x08,
+                0x00,
+                0x00,
+                0x00,
+            ]
+            + list(len(gifData).to_bytes(4, "little"))
+        )
+
+        self.bulkWrite(bytes(header))
+
+        self.bulkWrite(gifData)
+
+        self.write([0x36, 0x02])
+        status = self.readUntil({b"\x37\x02": self.parseStandardResult})
+        debugUsb(self.formatStandardResult("End writeQ565", 0, status))
+        return status
+
+    @timing
     def writeFrame(self, frame: bytes):
         if not self.streamReady:
             return False
@@ -379,13 +412,11 @@ class KrakenLCD:
                     or self.deleteBucket(self.nextFrameBucket)
                 )
                 and self.createBucket(self.nextFrameBucket, startAddress)
-                and self.writeGIF(frame, self.nextFrameBucket, fast=False)
+                and self.writeGIF(frame, self.nextFrameBucket)
                 and self.setLcdMode(DISPLAY_MODE.BUCKET, self.nextFrameBucket)
             )
-        if self.renderingMode == RENDERING_MODE.FAST_GIF:
-            result = self.writeGIF(frame, 0, fast=True) and self.setLcdMode(
-                DISPLAY_MODE.FAST_BUCKET, 0
-            )
+        if self.renderingMode == RENDERING_MODE.Q565:
+            result = self.writeQ565(frame)
         self.nextFrameBucket = (self.nextFrameBucket + 1) % self.bucketsToUse
         return result
 
@@ -403,21 +434,9 @@ class KrakenLCD:
                 output.append(raw[i][2])
                 output.append(0)
             return bytes(output)
+        elif self.renderingMode == RENDERING_MODE.Q565:
+            return encode_img(img.convert("RGB"))
         else:
-            # Ideas for improving performance/quality, unfortunately pillow has multiple bugs like
-            # https://github.com/python-pillow/Pillow/issues/5836
-            #
-            # A) variable palette
-            # img.convert("RGB").convert(
-            #     "P", palette=Image.Palette.ADAPTIVE, colors=colors
-            # ).save(byteio, "GIF", interlace=False)
-
-            # B) dithering
-            # img = img.convert("RGB")
-            # pal = img.quantize(colors)
-            # img = img.quantize(
-            #     colors, palette=pal, dither=Image.FLOYDSTEINBERG
-            # )
             byteio = BytesIO()
 
             @timing
@@ -429,13 +448,9 @@ class KrakenLCD:
                     )
                 else:
                     img = img.convert("RGB").convert("P")
-
-            @timing
-            def save():
                 img.save(byteio, "GIF", interlace=False, optimize=True)
 
             convert()
-            save()
             return byteio.getvalue()
 
     @timing
