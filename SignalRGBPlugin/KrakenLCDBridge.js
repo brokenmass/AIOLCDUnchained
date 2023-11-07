@@ -33,6 +33,14 @@ export function LedPositions() {
 }
 
 const parameters = {
+  fps: {
+    property: 'fps',
+    group: '',
+    label: 'FPS',
+    type: 'combobox',
+    values: ['MAXIMUM', 'SIGNALRGB LIMITED', '20', '10', '5', '1', '0.1'],
+    default: 'SIGNALRGB LIMITED',
+  },
   screenSize: {
     property: 'screenSize',
     group: '',
@@ -132,6 +140,7 @@ const parameters = {
 };
 export function ControllableParameters() {
   return [
+    parameters.fps,
     parameters.screenSize,
     parameters.imageFormat,
     parameters.colorPalette,
@@ -145,6 +154,10 @@ discovery: readonly
 */
 
 const BRIDGE_ADDRESS = 'http://127.0.0.1:30003';
+let nextCall = 0;
+export function onfpsChanged() {
+  nextCall = 0;
+}
 
 export function onscreenSizeChanged() {
   device.setSize([screenSize + 1, screenSize + 1]);
@@ -207,7 +220,7 @@ export function Initialize() {
 }
 
 export function Render() {
-  if (!controller.online) {
+  if (!controller.online || Date.now() < nextCall) {
     return false;
   }
 
@@ -232,8 +245,13 @@ export function Render() {
     sensorFontSize: device.getProperty('sensorFontSize')?.value,
     sensorLabelFontSize: device.getProperty('sensorLabelFontSize')?.value,
   };
+  const fpsConfig = device.getProperty('fps')?.value;
+  if (Number(fpsConfig)) {
+    nextCall = Date.now() + 1000 / Number(fpsConfig) - 15;
+  }
 
-  XmlHttp.Post(BRIDGE_ADDRESS + '/frame', () => {}, data, false);
+  const async = fpsConfig === 'MAXIMUM';
+  XmlHttp.Post(BRIDGE_ADDRESS + '/frame', () => {}, data, async);
 }
 
 export function Shutdown(suspend) {}
