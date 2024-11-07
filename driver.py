@@ -58,17 +58,6 @@ SUPPORTED_DEVICES = [
         "maxBucketSize": 20 * 1024 * 1024,  # 20MB
         "supportsLiquidMode": True,
     },
-    #  kraken 2023 disabled for now
-    # {
-    #     "pid": 0x300E,
-    #     "name": "Kraken 2023",
-    #     "resolution": Resolution(240, 240),
-    #     "renderingMode": RENDERING_MODE.RGBA,
-    #     "image": "http://127.0.0.1:30003/images/2023.png",
-    #     "totalBuckets": 1,
-    #     "maxBucketSize": 46 * 1024,  # 46KB
-    #     "supportsLiquidMode": False,
-    # },
     {
         "pid": 0x300C,
         "name": "Kraken Elite",
@@ -79,6 +68,16 @@ SUPPORTED_DEVICES = [
         "maxBucketSize": 20 * 1024 * 1024,  # 20MB
         "supportsLiquidMode": True,
     },
+    {
+        "pid": 0x3012,
+        "name": "Kraken Elite v2",
+        "resolution": Resolution(640, 640),
+        "renderingMode": RENDERING_MODE.Q565,
+        "image": "http://127.0.0.1:30003/images/2023elite.png",
+        "totalBuckets": 16,
+        "maxBucketSize": 20 * 1024 * 1024,  # 20MB
+        "supportsLiquidMode": True,
+    }
 ]
 
 
